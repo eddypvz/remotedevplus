@@ -1,6 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { writeFileSync, readFileSync } from 'node:fs';
 import { asignarCarriles } from '../apps/agent/src/services/git.js';
 import { sandbox, services, server, SUPER, PASS, q } from './helpers.js';
 
@@ -299,5 +300,119 @@ describe('git sobre un repositorio real', () => {
     const { as, login } = await server(svc3);
     await login('luis');
     assert.equal((await as('luis', 'GET', `/api/git/status?cwd=${q(sb3.at('y'))}`)).status, 403);
+  });
+});
+
+describe('conflictos de merge', () => {
+  /** Un repo con dos branches que tocan la misma línea: el conflicto garantizado. */
+  function enConflicto(nombre) {
+    const sb = sandbox([nombre]);
+    const en = (...args) => execFileSync('git', args, { cwd: sb.at(nombre), encoding: 'utf8' });
+    const escribir = (texto) => writeFileSync(sb.at(nombre, 'archivo.txt'), texto);
+
+    en('init', '-q', '-b', 'principal');
+    en('config', 'user.email', 'test@ejemplo.com');
+    en('config', 'user.name', 'Prueba');
+    escribir('base\n');
+    en('add', '.'); en('commit', '-qm', 'base');
+
+    en('switch', '-qc', 'otra');
+    escribir('desde otra\n');
+    en('add', '.'); en('commit', '-qm', 'cambio en otra');
+
+    en('switch', '-q', 'principal');
+    escribir('desde principal\n');
+    en('add', '.'); en('commit', '-qm', 'cambio en principal');
+
+    // Falla a propósito: es el conflicto que queremos.
+    try { en('merge', 'otra'); } catch { /* esperado */ }
+    return { sb, en, svc: services(sb, { repo: nombre }) };
+  }
+
+  test('el estado reconoce el merge a medias y lista el conflicto', async () => {
+    const { sb, svc } = enConflicto('r1');
+    const e = await svc.git.estado(SUPER, sb.at('r1'));
+    assert.equal(e.operacion, 'merge');
+    assert.equal(e.conflictos.length, 1);
+    assert.equal(e.conflictos[0].ruta, 'archivo.txt');
+  });
+
+  test('quedarse con un lado resuelve y deja el archivo staged', async () => {
+    const { sb, svc } = enConflicto('r2');
+    // `ours` en un merge es la branch en la que se está: principal.
+    const e = await svc.git.resolver(SUPER, sb.at('r2'), ['archivo.txt'], 'ours');
+    assert.equal(e.conflictos.length, 0, 'quedó marcado como conflicto');
+    assert.equal(readFileSync(sb.at('r2', 'archivo.txt'), 'utf8'), 'desde principal\n');
+    // No aparece en "preparados" y está bien: el contenido quedó igual al de
+    // HEAD, así que no hay ningún cambio que preparar. Lo que importa es que
+    // git ya no lo considera en conflicto.
+    assert.equal(e.preparados.length, 0);
+
+    // Y ahora el merge se puede terminar.
+    const r = await svc.git.seguir(SUPER, sb.at('r2'), 'continuar');
+    assert.equal(r.estado.operacion, null, 'el merge quedó a medias');
+    assert.equal(r.estado.conflictos.length, 0);
+  });
+
+  test('el otro lado trae el contenido de la branch que entra', async () => {
+    const { sb, svc } = enConflicto('r3');
+    const e = await svc.git.resolver(SUPER, sb.at('r3'), ['archivo.txt'], 'theirs');
+    assert.equal(readFileSync(sb.at('r3', 'archivo.txt'), 'utf8'), 'desde otra\n');
+    assert.equal(e.conflictos.length, 0);
+    // Acá sí difiere de HEAD, así que queda preparado para el commit del merge.
+    assert.equal(e.preparados.length, 1);
+  });
+
+  test('marcar resuelto a mano no toca el contenido, solo lo pone en el índice', async () => {
+    const { sb, svc } = enConflicto('r4');
+    writeFileSync(sb.at('r4', 'archivo.txt'), 'lo edité yo\n');
+    const e = await svc.git.resolver(SUPER, sb.at('r4'), ['archivo.txt'], 'manual');
+    assert.equal(e.conflictos.length, 0);
+    assert.equal(readFileSync(sb.at('r4', 'archivo.txt'), 'utf8'), 'lo edité yo\n');
+  });
+
+  test('abortar devuelve el repositorio a como estaba', async () => {
+    const { sb, svc } = enConflicto('r5');
+    const r = await svc.git.seguir(SUPER, sb.at('r5'), 'abortar');
+    assert.equal(r.estado.operacion, null);
+    assert.equal(r.estado.conflictos.length, 0);
+    assert.equal(readFileSync(sb.at('r5', 'archivo.txt'), 'utf8'), 'desde principal\n');
+  });
+
+  test('sin operación a medias, continuar y abortar fallan en vez de hacer algo raro', async () => {
+    const sb = sandbox(['limpio']);
+    const en = (...args) => execFileSync('git', args, { cwd: sb.at('limpio'), encoding: 'utf8' });
+    en('init', '-q', '-b', 'principal');
+    en('config', 'user.email', 'test@ejemplo.com');
+    en('config', 'user.name', 'Prueba');
+    writeFileSync(sb.at('limpio', 'a.txt'), 'x\n');
+    en('add', '.'); en('commit', '-qm', 'uno');
+    const svc = services(sb, { repo: 'limpio' });
+
+    await assert.rejects(() => svc.git.seguir(SUPER, sb.at('limpio'), 'continuar'), /a medias/);
+    await assert.rejects(() => svc.git.resolver(SUPER, sb.at('limpio'), ['a.txt'], 'inventado'), /desconocido/);
+  });
+
+  test('un rebase a medias se reconoce como rebase, no como merge', async () => {
+    const sb = sandbox(['r6']);
+    const en = (...args) => execFileSync('git', args, { cwd: sb.at('r6'), encoding: 'utf8' });
+    const escribir = (t) => writeFileSync(sb.at('r6', 'archivo.txt'), t);
+    en('init', '-q', '-b', 'principal');
+    en('config', 'user.email', 'test@ejemplo.com');
+    en('config', 'user.name', 'Prueba');
+    escribir('base\n'); en('add', '.'); en('commit', '-qm', 'base');
+    en('switch', '-qc', 'otra');
+    escribir('desde otra\n'); en('add', '.'); en('commit', '-qm', 'en otra');
+    en('switch', '-q', 'principal');
+    escribir('desde principal\n'); en('add', '.'); en('commit', '-qm', 'en principal');
+    en('switch', '-q', 'otra');
+    try { en('rebase', 'principal'); } catch { /* conflicto esperado */ }
+
+    const svc = services(sb, { repo: 'r6' });
+    const e = await svc.git.estado(SUPER, sb.at('r6'));
+    assert.equal(e.operacion, 'rebase', 'confundir rebase con merge ofrecería el comando equivocado');
+    // Y abortar un rebase usa `rebase --abort`, no `merge --abort`.
+    const r = await svc.git.seguir(SUPER, sb.at('r6'), 'abortar');
+    assert.equal(r.estado.operacion, null);
   });
 });

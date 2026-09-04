@@ -13,10 +13,12 @@ import { createAudit } from './services/audit.js';
 import { createAuth } from './services/auth.js';
 import { createUsers } from './services/users.js';
 import { createPty } from './services/pty.js';
+import { createEvents } from './services/events.js';
 import { createWorkspaces } from './services/workspaces.js';
 import { createClaude } from './services/claude.js';
 import { createGit } from './services/git.js';
 import { createSearch } from './services/search.js';
+import { LIMITS } from '@remotedevplus/protocol';
 import { COOKIE } from './server-shared.js';
 import authRoutes from './routes/auth.js';
 import fsRoutes from './routes/fs.js';
@@ -26,6 +28,7 @@ import workspaceRoutes from './routes/workspaces.js';
 import claudeRoutes from './routes/claude.js';
 import gitRoutes from './routes/git.js';
 import searchRoutes from './routes/search.js';
+import eventRoutes from './routes/events.js';
 
 export function createServices(cfg) {
   const db = openDb(cfg.dbPath);
@@ -34,12 +37,13 @@ export function createServices(cfg) {
   const hosts = createHosts();
   const guard = createPathGuard(cfg);
   const users = createUsers(db, audit, guard);
-  const pty = createPty(hosts, cfg, audit);
+  const events = createEvents(hosts, guard);
+  const pty = createPty(hosts, cfg, audit, events);
   const workspaces = createWorkspaces(db, guard, audit);
   const claude = createClaude(db, cfg, audit);
   const git = createGit(hosts, guard, audit);
   const search = createSearch(cfg, guard, audit);
-  return { db, audit, auth, users, hosts, guard, pty, workspaces, claude, git, search, cfg };
+  return { db, audit, auth, users, hosts, guard, events, pty, workspaces, claude, git, search, cfg };
 }
 
 export async function buildServer(cfg = loadConfig(), services = createServices(cfg)) {
@@ -65,6 +69,19 @@ export async function buildServer(cfg = loadConfig(), services = createServices(
       done(err);
     }
   });
+
+  /*
+   * Bytes crudos para la subida de archivos.
+   *
+   * Sin esto Fastify rechaza el cuerpo con 415. Se prefiere a multipart porque
+   * evita una dependencia y un parser que mantener: el navegador manda un
+   * `File` por `fetch` igual de bien, y el nombre viaja en la query.
+   */
+  app.addContentTypeParser(
+    'application/octet-stream',
+    { parseAs: 'buffer', bodyLimit: LIMITS.FILE_UPLOAD_MAX },
+    (_req, body, done) => done(null, body),
+  );
 
   await app.register(cookie);
   await app.register(websocket, { options: { maxPayload: 1024 * 1024 } });
@@ -115,6 +132,7 @@ export async function buildServer(cfg = loadConfig(), services = createServices(
   await app.register(claudeRoutes, services);
   await app.register(gitRoutes, services);
   await app.register(searchRoutes, services);
+  await app.register(eventRoutes, services);
 
   // El agente sirve el SPA él mismo. Por eso no hace falta Apache, nginx ni un
   // vhost: `node apps/agent/src/cli.js serve` ya es la app completa.
@@ -130,8 +148,23 @@ export async function buildServer(cfg = loadConfig(), services = createServices(
     if (!hasBuild) {
       return reply.code(503).type('text/html').send(NO_BUILD_HTML);
     }
-    // Fallback de SPA: cualquier ruta que no sea un archivo real la resuelve el
-    // index.html, para que recargar una ruta profunda no dé 404.
+    /*
+     * Un archivo que no está tiene que dar 404, no el index.
+     *
+     * El fallback de SPA existe para que recargar una ruta profunda funcione,
+     * pero aplicado a `/assets/algo.js` es una trampa: el navegador recibe HTML
+     * con código 200, intenta ejecutarlo como JavaScript y la aplicación queda
+     * en blanco sin ningún error que explique nada. Pasa en cada despliegue,
+     * porque el build cambia el hash de los chunks y un index.html cacheado
+     * sigue pidiendo los viejos.
+     *
+     * Con un 404 de verdad el navegador reintenta y recarga el index nuevo.
+     */
+    if (/\.[a-z0-9]{1,8}$/i.test(new URL(req.url, 'http://x').pathname)) {
+      return reply.code(404).send({ error: 'not_found' });
+    }
+    // Fallback de SPA: una ruta sin extensión la resuelve el index.html, para
+    // que recargar una ruta profunda no dé 404.
     return reply.sendFile('index.html');
   });
 

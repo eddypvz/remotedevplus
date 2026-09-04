@@ -239,4 +239,6 @@ export const LIMITS = {
   FILE_READ_MAX: 4 * 1024 * 1024,
   /** Entradas por directorio antes de truncar la respuesta. */
   DIR_ENTRIES_MAX: 5000,
+  /** Archivo más grande que se acepta subir, por pieza. */
+  FILE_UPLOAD_MAX: 64 * 1024 * 1024,
 };

@@ -1,3 +1,4 @@
+import { join } from 'node:path';
 import { httpError } from '../paths.js';
 
 /**
@@ -139,6 +140,23 @@ export function createGit(hosts, guard, audit) {
     return texto;
   }
 
+  /**
+   * Qué operación de git quedó a medias, mirando los archivos de control.
+   *
+   * Se leen del disco y no de la salida de `status` porque porcelain v2 no lo
+   * dice: hay que deducirlo, y deducirlo mal significa ofrecer
+   * "rebase --continue" en medio de un merge.
+   */
+  async function operacionEnCurso(r) {
+    const gitDir = join(r.path, '.git');
+    const hay = async (p) => !!(await r.host.stat(join(gitDir, p)));
+    if (await hay('rebase-merge') || await hay('rebase-apply')) return 'rebase';
+    if (await hay('MERGE_HEAD')) return 'merge';
+    if (await hay('CHERRY_PICK_HEAD')) return 'cherry-pick';
+    if (await hay('REVERT_HEAD')) return 'revert';
+    return null;
+  }
+
   /** Convierte los códigos XY de porcelain v2 en algo con nombre. */
   function estadoDe(xy) {
     const letra = (c) => ({ M: 'modificado', A: 'agregado', D: 'borrado', R: 'renombrado', C: 'copiado', T: 'tipo' }[c]);
@@ -180,6 +198,10 @@ export function createGit(hosts, guard, audit) {
 
       return {
         ...info,
+        // Qué operación quedó a medias. Sin esto la interfaz no puede ofrecer
+        // "continuar" ni "abortar", que es lo único que se quiere hacer cuando
+        // un merge o un rebase se para en un conflicto.
+        operacion: await operacionEnCurso(r),
         // `branch.head` devuelve el literal "(detached)" cuando no hay rama.
         // Se traduce a una bandera para que la interfaz no compare cadenas.
         desprendido: info.rama === '(detached)',
@@ -384,6 +406,55 @@ export function createGit(hosts, guard, audit) {
       await git(r, ['restore', '--worktree', '--', ...rutas]).catch(() => {});
       await git(r, ['clean', '-fd', '--', ...rutas]).catch(() => {});
       return this.estado(user, cwd);
+    },
+
+    /**
+     * Resuelve conflictos quedándose con un lado, o los marca como resueltos.
+     *
+     * `mio` y `suyo` son `--ours` y `--theirs`, y significan lo contrario según
+     * la operación: en un rebase "mío" es el commit que se está aplicando, no
+     * la rama en la que se estaba. Por eso la interfaz los nombra con lo que
+     * git llama a cada lado y no con "el mío" a secas.
+     *
+     * En los tres casos termina con `add`: en git, resolver un conflicto ES
+     * ponerlo en el índice.
+     */
+    async resolver(user, cwd, rutas, lado) {
+      const r = await repo(user, cwd);
+      if (!Array.isArray(rutas) || !rutas.length) throw httpError(400, 'No se indicó ningún archivo');
+      if (!['ours', 'theirs', 'manual'].includes(lado)) throw httpError(400, 'Lado desconocido');
+      if (lado !== 'manual') {
+        await git(r, ['checkout', `--${lado}`, '--', ...rutas]);
+      }
+      await git(r, ['add', '--', ...rutas]);
+      audit.log(user.id, 'git.resolve', { cwd: r.path, lado, rutas });
+      return this.estado(user, cwd);
+    },
+
+    /**
+     * Continúa o aborta la operación a medias.
+     *
+     * Se pasa `GIT_EDITOR=true` porque `rebase --continue` abre un editor para
+     * el mensaje del commit, y acá no hay nadie que lo cierre: sin esto el
+     * proceso queda colgado hasta el timeout.
+     */
+    async seguir(user, cwd, accion) {
+      const r = await repo(user, cwd);
+      if (!['continuar', 'abortar'].includes(accion)) throw httpError(400, 'Acción desconocida');
+      const op = await operacionEnCurso(r);
+      if (!op) throw httpError(400, 'No hay ninguna operación a medias');
+
+      const bandera = accion === 'continuar' ? '--continue' : '--abort';
+      const comando = op === 'cherry-pick' ? 'cherry-pick' : op === 'revert' ? 'revert' : op;
+      const { code, stdout, stderr } = await r.host.exec('git', [comando, bandera], {
+        cwd: r.path,
+        env: { GIT_EDITOR: 'true', GIT_TERMINAL_PROMPT: '0' },
+        timeoutMs: 60_000,
+      });
+      const texto = `${stdout}\n${stderr}`.trim();
+      if (code !== 0) throw httpError(400, texto || `git ${comando} ${bandera} falló`);
+      audit.log(user.id, 'git.' + accion, { cwd: r.path, operacion: op });
+      return { salida: texto, estado: await this.estado(user, cwd) };
     },
 
     async commit(user, cwd, mensaje, opciones = {}) {

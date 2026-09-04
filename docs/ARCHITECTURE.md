@@ -89,7 +89,7 @@ Tablet ──HTTPS──> remotedevplus-agent (Node, usuario del dev)
                     ├── GET  /            SPA construido (estático)
                     ├── REST /api/*       petición-respuesta
                     ├── WS   /ws/pty/:id  bytes crudos del PTY (binario)
-                    └── WS   /ws/events   cambios de fs, estado de git
+                    └── WS   /ws/events   cambios de fs, salida de terminales
 ```
 
 Tres modos de despliegue; el dev elige, el sistema no impone:
@@ -638,11 +638,41 @@ máquinas, con bootstrap del bundle y túnel. Passkeys y log de auditoría, si s
 decide exponer a internet. Módulo *Servicios* opcional. Distribución como
 `npx remotedevplus`.
 
+## Servir archivos al navegador
+
+Hay dos rutas y la diferencia es de seguridad, no de comodidad.
+
+`/api/fs/download` manda `content-disposition: attachment` con
+`application/octet-stream`: el navegador lo guarda y nunca lo interpreta, así
+que sirve cualquier archivo sin riesgo.
+
+`/api/fs/raw` manda `inline`, que es lo que necesitan un `<img>` y un
+`<iframe>`. Servir un archivo interpretable desde el mismo origen que la
+aplicación es un XSS —un `.html` del repositorio correría su script con la
+cookie de sesión puesta—, así que:
+
+- **lista blanca de extensiones**, solo imágenes y PDF; el resto responde 415;
+- **`X-Content-Type-Options: nosniff`**, o el navegador podría adivinar otro
+  tipo y la lista blanca no serviría de nada;
+- **`Content-Security-Policy: sandbox` en los SVG**, que son documentos: dentro
+  de un `<img>` no ejecutan nada, pero abiertos en una pestaña sí. No se aplica
+  al PDF porque deshabilitaría el visor integrado del navegador.
+
 ## Deuda conocida
 
-- **`/ws/events` está definido en el protocolo pero sin implementar**, así que
-  el explorador no se refresca solo cuando cambian archivos en disco. Es lo que
-  haría que escribir un archivo con Claude se vea al instante en el árbol.
+- **Un directorio versionado que aparece después de suscribirse no se observa.**
+  Al abrir un repo el agente pide a git la lista de directorios con archivos
+  versionados y observa esos. Si un checkout trae un directorio nuevo, el aviso
+  llega igual —lo da el directorio padre— pero lo que se edite adentro no se ve
+  hasta reabrir el panel.
+- **Las carpetas no se pueden arrastrar al explorador.** Un directorio soltado
+  llega como una entrada vacía y habría que recorrerlo con la API de entradas
+  del navegador, que Safari de iPad no trae. Se suben sus archivos sueltos.
+- **Tampoco se pueden descargar carpetas**: habría que comprimirlas, y el agente
+  no arma archivos comprimidos.
+- **Los conflictos se resuelven quedándose con un lado o editando a mano.** No
+  hay editor de tres paneles: en el ancho de una tablet no entra, y abrir el
+  archivo con sus marcadores sí funciona.
 - **Las conversaciones de todos los devs van al mismo `~/.claude/projects`** con
   un agente compartido. Ver *Pendiente: dónde viven las conversaciones de cada
   dev*.

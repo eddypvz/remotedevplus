@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { writeFileSync, readFileSync } from 'node:fs';
 import { sandbox, services, SUPER } from './helpers.js';
 
 /**
@@ -77,5 +77,108 @@ describe('búsqueda', () => {
       if (primeroEn < 0) primeroEn = Date.now() - inicio;
     });
     assert.ok(primeroEn >= 0, 'llegó al menos un evento por callback y no en un array final');
+  });
+});
+
+describe('reemplazo global', () => {
+  /** El reemplazo se prueba contra el servicio: la ruta HTTP es una envoltura. */
+  const conArchivos = (archivos) => {
+    const sb = sandbox(['proj'], archivos);
+    return { sb, svc: services(sb, { proj: 'proj' }) };
+  };
+  const leer = (sb, f) => readFileSync(sb.at(f));
+
+  test('reemplaza en todos los archivos que coinciden', async () => {
+    const { sb, svc } = conArchivos({
+      'proj/a.txt': 'hola mundo\nhola de nuevo\n',
+      'proj/b.txt': 'nada que ver\n',
+      'proj/c.txt': 'hola\n',
+    });
+    const r = await svc.search.reemplazar(SUPER, [sb.at('proj')], { patron: 'hola', literal: true }, 'chau');
+    assert.equal(r.archivos, 2);
+    assert.equal(r.sustituciones, 3);
+    assert.equal(leer(sb, 'proj/a.txt').toString(), 'chau mundo\nchau de nuevo\n');
+    assert.equal(leer(sb, 'proj/b.txt').toString(), 'nada que ver\n', 'tocó un archivo sin coincidencias');
+  });
+
+  test('no le agrega un salto de línea al archivo que no lo tenía', async () => {
+    // `--passthru` imprime línea por línea y agregaría un \n al final. Sin
+    // corregirlo, cada reemplazo ensuciaría el diff de todo archivo sin newline.
+    const { sb, svc } = conArchivos({ 'proj/sin.txt': 'hola mundo\nsegunda linea hola' });
+    await svc.search.reemplazar(SUPER, [sb.at('proj')], { patron: 'hola', literal: true }, 'chau');
+    const salida = leer(sb, 'proj/sin.txt');
+    assert.equal(salida.toString(), 'chau mundo\nsegunda linea chau');
+    assert.notEqual(salida[salida.length - 1], 0x0a, 'agregó un salto que no estaba');
+  });
+
+  test('en modo literal un $ en el reemplazo es un $, no una referencia', async () => {
+    // ripgrep interpreta $1 y $nombre en --replace aun con --fixed-strings.
+    // Sin escapar, "US$100" dejaría "US" y borraría el resto en silencio.
+    const { sb, svc } = conArchivos({ 'proj/p.txt': 'precio: XX\n' });
+    await svc.search.reemplazar(SUPER, [sb.at('proj')], { patron: 'XX', literal: true }, 'US$100');
+    assert.equal(leer(sb, 'proj/p.txt').toString(), 'precio: US$100\n');
+  });
+
+  test('en modo expresión regular los grupos sí funcionan', async () => {
+    const { sb, svc } = conArchivos({ 'proj/r.txt': 'ancho: 30px\nalto: 40px\n' });
+    const r = await svc.search.reemplazar(
+      SUPER, [sb.at('proj')],
+      { patron: '(\\d+)px', literal: false },
+      // Con llaves: ver el test siguiente, que explica por qué.
+      '${1}rem',
+    );
+    assert.equal(r.sustituciones, 2);
+    assert.equal(leer(sb, 'proj/r.txt').toString(), 'ancho: 30rem\nalto: 40rem\n');
+  });
+
+  test('un grupo pegado a letras necesita llaves, y sin ellas queda vacío', async () => {
+    /*
+     * Esto no es un defecto que se pueda arreglar acá: el motor de Rust lee
+     * `$1rem` como el grupo LLAMADO "1rem", que no existe, y lo reemplaza por
+     * nada. Queda como test para que nadie "arregle" el escapado creyendo que
+     * es un error nuestro, y para que la interfaz siga diciendo `${1}` en su
+     * texto de ayuda.
+     */
+    const { sb, svc } = conArchivos({ 'proj/r.txt': 'ancho: 30px\n' });
+    await svc.search.reemplazar(SUPER, [sb.at('proj')], { patron: '(\\d+)px', literal: false }, '$1rem');
+    assert.equal(leer(sb, 'proj/r.txt').toString(), 'ancho: \n');
+
+    // Separado por un espacio no hay ambigüedad y funciona sin llaves.
+    const otro = conArchivos({ 'proj/s.txt': 'ancho: 30px\n' });
+    await otro.svc.search.reemplazar(SUPER, [otro.sb.at('proj')], { patron: '(\\d+)px', literal: false }, '$1 rem');
+    assert.equal(leer(otro.sb, 'proj/s.txt').toString(), 'ancho: 30 rem\n');
+  });
+
+  test('CRLF se conserva', async () => {
+    const { sb, svc } = conArchivos({ 'proj/w.txt': 'hola\r\nmundo hola\r\n' });
+    await svc.search.reemplazar(SUPER, [sb.at('proj')], { patron: 'hola', literal: true }, 'chau');
+    assert.equal(leer(sb, 'proj/w.txt').toString(), 'chau\r\nmundo chau\r\n');
+  });
+
+  test('con rutas indicadas solo toca esas', async () => {
+    const { sb, svc } = conArchivos({ 'proj/a.txt': 'hola\n', 'proj/b.txt': 'hola\n' });
+    const r = await svc.search.reemplazar(
+      SUPER, [sb.at('proj')], { patron: 'hola', literal: true }, 'chau',
+      [sb.at('proj/a.txt')],
+    );
+    assert.equal(r.archivos, 1);
+    assert.equal(leer(sb, 'proj/a.txt').toString(), 'chau\n');
+    assert.equal(leer(sb, 'proj/b.txt').toString(), 'hola\n');
+  });
+
+  test('no reemplaza fuera de las raíces', async () => {
+    const sb = sandbox(['proj', 'afuera'], { 'afuera/ajeno.txt': 'hola\n' });
+    const svc = services(sb, { proj: 'proj' });
+    await assert.rejects(
+      () => svc.search.reemplazar(SUPER, [sb.at('proj')], { patron: 'hola', literal: true }, 'chau', [sb.at('afuera/ajeno.txt')]),
+    );
+    assert.equal(readFileSync(sb.at('afuera/ajeno.txt'), 'utf8'), 'hola\n');
+  });
+
+  test('respeta los filtros por extensión', async () => {
+    const { sb, svc } = conArchivos({ 'proj/a.js': 'hola\n', 'proj/a.md': 'hola\n' });
+    await svc.search.reemplazar(SUPER, [sb.at('proj')], { patron: 'hola', literal: true, incluir: '*.js' }, 'chau');
+    assert.equal(leer(sb, 'proj/a.js').toString(), 'chau\n');
+    assert.equal(leer(sb, 'proj/a.md').toString(), 'hola\n');
   });
 });

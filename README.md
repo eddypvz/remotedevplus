@@ -15,17 +15,46 @@ node apps/agent/src/cli.js user add <tu-usuario> --admin
 node apps/agent/src/cli.js serve --root /var/www
 ```
 
-Abra `http://127.0.0.1:8790`. Para entrar desde la tablet, ver *Exponerlo*.
+Abra `http://127.0.0.1:8790`. Para dejarlo corriendo siempre y llegar desde la
+tablet, ver *[Instalarlo como servicio](#instalarlo-como-servicio)*.
 
-## Estado
+## Qué hay
 
-**Fase 1 funcional, más el cliente nativo de Claude.** Explorador de archivos,
-workspaces, terminal, Claude Code en dos sabores, login con permisos por módulo,
-gestor de usuarios y editor con CodeMirror 6.
+| | |
+|---|---|
+| **Explorador** | árbol, menú contextual (crear, renombrar, duplicar, copiar, cortar, pegar, eliminar), subir y descargar archivos |
+| **Editor** | CodeMirror 6 con resaltado, plegado y búsqueda; guarda al disco |
+| **Visor** | markdown formateado (los README se abren así, y se alterna a editor), imágenes con damero de transparencia y PDF en el visor del navegador |
+| **Terminal** | PTY real, varias a la vez, con panel propio para saltar entre ellas; copiar y pegar con botón, que en tablet no existen de otra forma |
+| **Claude Code** | dos clientes que conviven: el nativo sobre el Agent SDK y la TUI en un PTY |
+| **Git** | árbol de commits, tres cubetas de trabajo, stash, diff, fetch/pull/push/rebase/checkout, conflictos de merge |
+| **Buscador** | ripgrep en streaming, con reemplazo global |
+| **Workspaces** | conjuntos de carpetas por usuario, guardados en la base |
+| **Usuarios** | login, permisos por módulo, raíces por usuario |
+| **Canal de eventos** | el explorador y el panel de git se refrescan solos cuando cambia el disco |
+| **Base de datos** | ⬜ pendiente |
 
-El gestor de git, el buscador global, el autocompletado con LSP y el cliente de
-base de datos están planificados y el layout ya los espera — los iconos abren
-paneles que dicen en qué fase llegan. Ver [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+Lo que falta y por qué está en
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), sección *Deuda conocida*. Los dos
+grandes: el autocompletado con LSP y el cliente de base de datos.
+
+## Pensado para tablet, no adaptado
+
+No es una etiqueta de marketing; condiciona el código:
+
+- **CodeMirror 6 y no Monaco.** Monaco es justamente por qué code-server se
+  siente mal en iPad: pesa unos 5MB, no tiene selección táctil real y pelea con
+  el teclado virtual.
+- **Nada depende del hover.** En el panel de git los botones de cada archivo
+  están puestos, no aparecen al pasar el mouse — que en tablet no existe.
+- **Barra de teclas accesorias** con Esc, Tab y Shift+Tab, sin las cuales Claude
+  Code no se maneja en iPad. Y Ctrl pegajoso, que es la única forma de hacer
+  Ctrl+C sin teclado físico.
+- **El menú contextual se abre de tres formas**: clic derecho, pulsación larga y
+  un botón `⋯` visible. En tablet no hay clic derecho y la pulsación larga no se
+  descubre sola.
+- **`dvh` y nunca `vh`**: en iPad `vh` mide el viewport grande y el contenido
+  queda debajo de la barra del navegador.
 
 ## Los dos clientes de Claude
 
@@ -109,7 +138,7 @@ verifica. Y cada usuario puede limitarse a un subconjunto de las raíces.
 Un límite honesto: **quien tiene terminal tiene todo lo que tiene el usuario del
 sistema.** Los permisos separan responsabilidades, y son contención real solo
 para usuarios sin terminal. Aislamiento verdadero se consigue con un agente por
-dev — ver `deploy/remotedevplus@.service`.
+dev — lo instala `deploy/instalar.sh`.
 
 ## Exponerlo
 
@@ -127,9 +156,150 @@ node apps/agent/src/cli.js serve --host 0.0.0.0 \
 node apps/agent/src/cli.js serve --trust-proxy
 ```
 
+En el modo C el TLS lo termina el proxy, y `--trust-proxy` no es opcional: sin
+él el agente ve la IP del proxy en vez de la del cliente —lo que arruina el
+bloqueo por intentos de login— y no marca la cookie como `secure`, porque estaría
+mirando su propio TLS en vez del de la conexión real. El proxy tiene que
+reenviar los WebSocket, o la terminal no abre.
+
 El modo B es el recomendado y no por comodidad: `navigator.clipboard` solo
 funciona en secure context, y sin portapapeles un editor de código en iPad no
 sirve.
+
+## Instalarlo como servicio
+
+Arrancarlo a mano sirve para probarlo; para usarlo todos los días conviene que
+sobreviva a cerrar la terminal y a reiniciar la máquina.
+
+```bash
+sudo deploy/instalar.sh --host 0.0.0.0 \
+  --cert /ruta/cert.pem --key /ruta/key.pem
+
+node apps/agent/src/cli.js user add <tu-usuario> --admin   # solo la primera vez
+```
+
+| Opción | Qué hace |
+|---|---|
+| `--usuario <nombre>` | quién corre el agente. Default: quien invocó `sudo` |
+| `--puerto <n>` | default `8790` |
+| `--host <ip>` | interfaz donde escucha. Default `127.0.0.1` |
+| `--cert <f>` `--key <f>` | certificado TLS que ya se tenga |
+| `--permitir-sudo` | el terminal del IDE queda igual que una sesión SSH: `sudo` funciona |
+| `--autofirmado` | genera un certificado propio para el hostname y las IP de la máquina |
+| `--tras-proxy` | el agente va detrás de nginx/Apache, que termina TLS |
+| `--sin-build` | no compilar aunque falte `dist/` |
+
+Es **idempotente**: se puede volver a correr sin miedo, y hay que hacerlo si se
+regenera el certificado, porque lo que lee el agente es una copia.
+
+### HTTPS sin dominio ni autoridad certificadora
+
+En una máquina cualquiera no hay dominio ni una CA propia instalada en los
+dispositivos. Para eso está `--autofirmado`:
+
+```bash
+sudo deploy/instalar.sh --host 0.0.0.0 --autofirmado
+```
+
+Genera un certificado que cubre el hostname y **todas las IP de la máquina**,
+así que se entra por `https://192.168.1.50:8790` sin que el navegador se queje
+del nombre. Sí se queja de quién lo firmó: hay que aceptarlo una vez por
+dispositivo.
+
+Vale la pena aceptarlo. Sin HTTPS el navegador no da *secure context*, y eso no
+es cosmético: `navigator.clipboard` directamente no existe, así que copiar cae a
+un respaldo peor y **pegar en el terminal pasa a pedir un diálogo** en vez de
+funcionar de una.
+
+### Qué hace
+
+Comprueba todo antes de tocar nada —dejar media instalación hecha y fallar es
+peor que no empezar—, compila el SPA si falta `dist/`, copia el certificado a
+`/etc/remotedevplus/tls/`, genera la unidad de systemd con la ruta real del
+código y arranca el servicio. Si no arranca, muestra el registro y sale con
+error en vez de decir que todo salió bien.
+
+**Es lo único del proyecto que necesita root**, y solo para dos cosas que el
+agente no puede hacer solo: escribir en `/etc` y registrar el servicio. El
+agente sigue corriendo sin privilegios, como el usuario que se le indique.
+
+### `sudo` desde el terminal del IDE
+
+Por defecto **no funciona**, y no por descuido: la unidad lleva
+`NoNewPrivileges`, que anula el bit setuid de `sudo`, y `ProtectSystem=full`,
+que deja `/usr` y `/etc` en solo lectura.
+
+```bash
+sudo deploy/instalar.sh --permitir-sudo
+```
+
+quita las dos —van juntas, porque un `sudo` que arranca y después falla al
+escribir en `/etc` es peor que no tenerlo— y el terminal del IDE pasa a
+comportarse **igual que una sesión SSH** de ese usuario.
+
+Cuándo tiene sentido: una máquina con un solo dueño, donde el IDE reemplaza al
+terminal de SSH. Ahí no agrega ningún acceso que esa persona no tuviera ya.
+
+Cuándo no: **con varios devs.** El permiso `module:terminal` pasaría a valer
+root para cualquiera que lo tenga, aunque no le hayas dado una cuenta con sudo.
+Ahí lo correcto es un agente por dev, cada uno como su propio usuario del
+sistema — que es como está pensado.
+
+### Qué NO hace, y por qué
+
+Las tres las avisa al terminar, con el comando exacto:
+
+- **Crear el primer usuario.** Haría falta inventar una contraseña, y una
+  generada que después nadie cambia es peor que no tenerla. Sin usuarios el
+  agente responde `503` a todo.
+- **Abrir el puerto en el firewall.** Depende de la máquina, y abrirlo sin que
+  se lo pidan es exactamente la sorpresa que un instalador no debe dar.
+- **Escuchar fuera de loopback.** El default es `127.0.0.1`. Exponer un servicio
+  en todas las interfaces es una decisión, no algo que pase de costado.
+
+### Un agente por dev
+
+La unidad es una plantilla, así que cada dev tiene el suyo:
+
+```bash
+sudo deploy/instalar.sh --usuario ana --puerto 8791
+sudo systemctl status remotedevplus@ana
+journalctl -u remotedevplus@ana -f
+```
+
+Esto es lo que hace innecesario un supervisor privilegiado: **el aislamiento
+entre devs no sale de código dentro del agente, sale del sistema operativo.**
+Cada uno corre como su propio usuario, con sus archivos, sus llaves SSH, sus
+credenciales de Claude y sus procesos.
+
+### En una máquina nueva
+
+Además de los [requisitos](#requisitos) del proyecto hacen falta **systemd** y
+**`runuser`**. El `npm install` y el build los hace el instalador.
+
+El mínimo de Node lo lee de `engines` en el `package.json`, así que no puede
+quedar desincronizado con lo que el proyecto declara. Y si Node vino de `nvm` o
+`fnm` vive en el home del usuario y root no lo vería, así que lo busca primero
+como el usuario que va a ejecutarlo.
+
+### Dónde queda cada cosa
+
+| | |
+|---|---|
+| `/etc/systemd/system/remotedevplus@.service` | la unidad, generada |
+| `/etc/remotedevplus/<usuario>.env` | puerto, host y rutas del certificado |
+| `/etc/remotedevplus/tls/` | copia del certificado, del usuario |
+| `<repo>/data/remotedevplus.db` | usuarios, sesiones, workspaces |
+
+### Desinstalar
+
+```bash
+sudo systemctl disable --now remotedevplus@<usuario>
+sudo rm -rf /etc/systemd/system/remotedevplus@.service /etc/remotedevplus
+sudo systemctl daemon-reload
+```
+
+La base de datos vive en el repositorio, así que no se toca.
 
 Si va a internet, lea
 [Si se publica en internet](docs/ARCHITECTURE.md#si-se-publica-en-internet)
@@ -173,6 +343,11 @@ y el orden no importa.
 | `tests/pty.test.js` | El ring buffer del scrollback y la lista blanca de banderas de Claude Code |
 | `tests/claude.test.js` | La frontera y el aislamiento del cliente nativo. No habla con la API: automatizar una conversación real gastaría cuota en cada corrida |
 | `tests/markdown.test.js` | Que el markdown de la conversación se sanee. Los resultados de herramientas traen contenido de archivos del proyecto, así que un README con un `<script>` llegaría al navegador |
+| `tests/fs.test.js` | Subir, descargar, copiar y mover: que el nombre sea un nombre y no una ruta, que no se cruce la frontera en ninguna dirección, y que sin `fs:write` no se escriba nada |
+| `tests/git.test.js` | El reparto de carriles del árbol, y los conflictos de merge: quedarse con un lado, marcar resuelto, continuar y abortar sin confundir un rebase con un merge |
+| `tests/search.test.js` | La búsqueda en streaming y el reemplazo global: que no le agregue un salto de línea al archivo que no lo tenía, que un `$` literal sobreviva, y que respete los filtros |
+| `tests/events.test.js` | El canal de eventos: que no se pueda observar fuera de las raíces, que dos clientes compartan un solo observador, y que cerrar la conexión no filtre ninguno |
+| `tests/layout.test.js` | Las reglas de pestañas y sidebar, que son puro estado y se rompen sin ruido |
 
 `npm run typecheck` no alcanza por sí solo: `vue-tsc` no detecta etiquetas HTML
 mal cerradas en las plantillas. Por eso `check` corre también el build.
@@ -181,13 +356,17 @@ mal cerradas en las plantillas. Por eso `check` corre también el build.
 
 ```
 apps/agent/      daemon Node: Fastify + node-pty + node:sqlite
+  src/paths.js     LA FRONTERA DE SEGURIDAD. Toda ruta pasa por acá
   src/hosts/       interfaz Host (LocalHost hoy, SshHost después)
-  src/services/    fs, pty, auth, users, audit
+  src/services/    auth, users, workspaces, pty, claude, git, search, events
   src/routes/      REST y WebSocket, cada ruta con su `requires`
 apps/web/        Vue 3 + Vite → dist/, que sirve el propio agente
   src/layout/      rail, sidebar, workbench con pestañas
-  src/modules/     cada módulo es una pestaña; se registran en modules/index.ts
+  src/modules/     cada módulo es una pestaña o un panel; se registran en modules/index.ts
+  src/stores/      Pinia
+packages/protocol/  tipos y constantes compartidas, JS plano sin build
 tests/           node:test, sin dependencias
-packages/protocol/  tipos y constantes compartidas, sin build
-deploy/          EJEMPLOS de proxy y systemd; el sistema nunca los toca
+scripts/         dev.mjs, sdk-surface.mjs
+docs/            ARCHITECTURE.md, SDK.md, sdk-surface.json
+deploy/          instalar.sh, y EJEMPLOS de proxy que el sistema nunca toca
 ```

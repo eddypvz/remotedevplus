@@ -1,4 +1,5 @@
 import * as fsp from 'node:fs/promises';
+import { watch as fsWatch } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { join, basename } from 'node:path';
 import * as pty from '@homebridge/node-pty-prebuilt-multiarch';
@@ -72,8 +73,38 @@ export class LocalHost {
   }
 
   mkdir(p) { return fsp.mkdir(p, { recursive: true }); }
+
+  /** Copia un archivo o un árbol entero. Nunca pisa lo que ya existe. */
+  copy(from, to) { return fsp.cp(from, to, { recursive: true, errorOnExist: true, force: false }); }
+
+  /** Escribe bytes crudos. `writeFile` es para texto; esto es para lo que se sube. */
+  async writeBytes(p, buf) {
+    const tmp = `${p}.subiendo-${process.pid}`;
+    await fsp.writeFile(tmp, buf);
+    await fsp.rename(tmp, p);
+  }
+
   remove(p, recursive) { return fsp.rm(p, { recursive, force: false }); }
   rename(from, to) { return fsp.rename(from, to); }
+
+  /**
+   * Observa UN directorio, sin recursión, y avisa cuando algo cambia dentro.
+   *
+   * No recursivo a propósito: `fs.watch` recursivo en Linux abre un inotify por
+   * subdirectorio, y un `node_modules` agota el límite del sistema
+   * (`max_user_watches`) sin avisar. El explorador solo necesita saber de las
+   * carpetas que tiene desplegadas, que son las que se ven, así que suscribe
+   * esas y nada más.
+   *
+   * @returns {() => void} para dejar de observar
+   */
+  watch(dir, onChange) {
+    const w = fsWatch(dir, { persistent: false }, () => onChange());
+    // Un directorio borrado emite ENOENT por este canal; no es motivo para
+    // tumbar el agente.
+    w.on('error', () => { try { w.close(); } catch { /* ya cerrado */ } });
+    return () => { try { w.close(); } catch { /* ya cerrado */ } };
+  }
 
   spawnPty({ file, args, cwd, cols, rows, env }) {
     return pty.spawn(file, args, {

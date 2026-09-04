@@ -7,7 +7,12 @@ import { ref } from 'vue';
  * cambiar de modo. Sin esta barra, Claude Code es inusable en tablet — que es
  * exactamente el problema que este proyecto existe para resolver.
  */
-const emit = defineEmits<{ (e: 'send', data: string): void; (e: 'ctrl', on: boolean): void }>();
+const emit = defineEmits<{
+  (e: 'send', data: string): void;
+  (e: 'ctrl', on: boolean): void;
+  (e: 'pegar'): void;
+  (e: 'copiar'): void;
+}>();
 
 const ctrlOn = ref(false);
 
@@ -42,6 +47,18 @@ const keys = [
   <div class="keys rdp-scroll" role="toolbar" aria-label="Teclas para el terminal">
     <button class="key mod" :class="{ on: ctrlOn }" :aria-pressed="ctrlOn" @click="toggleCtrl">
       ctrl
+    </button>
+    <!--
+      Pegar necesita un botón propio.
+      En la tablet, mantener apretado sobre el terminal no ofrece "Pegar": el
+      textarea de xterm es invisible y de un píxel, así que iOS no encuentra
+      nada editable donde mostrar el menú.
+    -->
+    <button class="key mod" title="Copiar la selección, o la pantalla" @click="emit('copiar')">
+      copiar
+    </button>
+    <button class="key mod" title="Pegar en el terminal" @click="emit('pegar')">
+      pegar
     </button>
     <button
       v-for="k in keys" :key="k.label"

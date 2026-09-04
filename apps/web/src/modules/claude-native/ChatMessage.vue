@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import Icon from '../../ui/Icon.vue';
-import Markdown from './Markdown.vue';
+import Markdown from '../../ui/Markdown.vue';
 
 /**
  * Un mensaje de la conversación.

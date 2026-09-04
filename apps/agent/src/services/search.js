@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { readFile, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { httpError } from '../paths.js';
 
@@ -41,6 +42,8 @@ function resolverRipgrep(preferido) {
 
 const MAX_RESULTADOS = 2000;
 const MAX_POR_ARCHIVO = 60;
+/** Tope de archivos que un solo reemplazo puede tocar. */
+const MAX_ARCHIVOS_REEMPLAZO = 500;
 
 export function createSearch(cfg, guard, audit) {
   const RG = resolverRipgrep(cfg.rgBin);
@@ -167,7 +170,7 @@ export function createSearch(cfg, guard, audit) {
         hijo.on('error', (err) => {
           errores = err.code === 'ENOENT'
             ? 'No se encontró ripgrep. Debería venir con el proyecto: ejecute npm install, '
-              + 'o instalalo en el sistema y apuntá a él con --rg-bin'
+              + 'o instálelo en el sistema y apunte a él con --rg-bin'
             : err.message;
           terminar('error');
         });
@@ -176,5 +179,128 @@ export function createSearch(cfg, guard, audit) {
         hijo.on('close', (code) => terminar(code === 0 || code === 1 ? 'fin' : 'error'));
       });
     },
+
+    /**
+     * Reemplaza en todos los archivos que coinciden.
+     *
+     * Lo hace **ripgrep**, con `--passthru --replace`, y no una expresión
+     * regular de JavaScript. Es la única forma de que lo que se reemplaza sea
+     * exactamente lo que se mostró: el motor de Rust y el de JavaScript no
+     * coinciden en clases Unicode, en `\b` ni en los cuantificadores perezosos,
+     * y reemplazar con un motor distinto del que buscó es cómo se corrompe un
+     * proyecto en silencio.
+     *
+     * `rutas` limita la operación a los archivos indicados; sin ella se
+     * reemplaza en todo lo que coincida.
+     */
+    async reemplazar(user, carpetas, entrada, reemplazo, rutas = null) {
+      const opciones = limpiar(entrada);
+      if (typeof reemplazo !== 'string') throw httpError(400, 'Falta por qué reemplazar');
+      if (reemplazo.length > 2000) throw httpError(400, 'El reemplazo es demasiado largo');
+
+      // Qué archivos tocar: los que coinciden, o los que pidieron.
+      const objetivo = new Set();
+      if (Array.isArray(rutas) && rutas.length) {
+        for (const ruta of rutas.slice(0, MAX_ARCHIVOS_REEMPLAZO)) {
+          objetivo.add((await guard.resolvePath(user, ruta, { mustExist: true })).path);
+        }
+      } else {
+        await this.buscar(user, carpetas, entrada, (ev) => {
+          if (ev.t === 'archivo' && objetivo.size < MAX_ARCHIVOS_REEMPLAZO) objetivo.add(ev.ruta);
+        });
+      }
+      if (!objetivo.size) return { archivos: 0, sustituciones: 0, fallos: [] };
+
+      /*
+       * En modo literal se escapan los `$` del reemplazo.
+       *
+       * `--replace` siempre interpreta `$1` y `$nombre` como referencias, aun
+       * con `--fixed-strings`. Sin escapar, reemplazar por `US$100` dejaría
+       * `US` y borraría el resto sin decir nada.
+       */
+      const repl = opciones.literal ? reemplazo.replace(/\$/g, '$$$$') : reemplazo;
+
+      let sustituciones = 0;
+      let archivos = 0;
+      const fallos = [];
+
+      for (const ruta of objetivo) {
+        try {
+          const antes = await readFile(ruta);
+          let nuevo = await pasarPorRipgrep(RG, opciones, repl, ruta);
+          if (nuevo === null) continue;
+          /*
+           * `--passthru` imprime línea por línea, así que le agrega un salto
+           * final al archivo que no lo tenía. Sin esto, buscar y reemplazar
+           * modificaría en silencio cada archivo sin newline al final —y en un
+           * repositorio eso aparece como un cambio espurio en el diff.
+           */
+          const teniaSalto = antes.length > 0 && antes[antes.length - 1] === 0x0a;
+          if (!teniaSalto && nuevo.length > 0 && nuevo[nuevo.length - 1] === 0x0a) {
+            nuevo = nuevo.subarray(0, nuevo.length - 1);
+          }
+          if (antes.equals(nuevo)) continue;
+          // Se cuenta ANTES de escribir: después las coincidencias ya no están,
+          // y si el reemplazo contiene el patrón el número saldría al revés.
+          const cuantas = await contar(RG, opciones, ruta);
+          await writeFile(ruta, nuevo);
+          archivos++;
+          sustituciones += cuantas;
+        } catch (e) {
+          fallos.push({ ruta, motivo: e?.message || 'no se pudo reescribir' });
+        }
+      }
+
+      audit.log(user.id, 'search.replace', {
+        patron: opciones.patron, reemplazo, archivos, sustituciones,
+      });
+      return { archivos, sustituciones, fallos };
+    },
   };
+
+  /**
+   * Corre ripgrep sobre un archivo y devuelve su contenido ya reemplazado.
+   *
+   * `--passthru` imprime también las líneas que no coinciden, así la salida es
+   * el archivo entero. Devuelve `null` si ripgrep no produjo nada útil —un
+   * binario, por ejemplo—, y ahí el archivo se deja como estaba.
+   */
+  function pasarPorRipgrep(RG, opciones, repl, ruta) {
+    const args = ['--passthru', '--no-line-number', '--no-filename', '--color', 'never'];
+    if (opciones.literal) args.push('--fixed-strings');
+    if (opciones.palabraCompleta) args.push('--word-regexp');
+    args.push(opciones.sensible ? '--case-sensitive' : '--smart-case');
+    args.push('--replace', repl, '-e', opciones.patron, '--', ruta);
+
+    return new Promise((resolve, reject) => {
+      const hijo = spawn(RG, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+      const trozos = [];
+      let err = '';
+      hijo.stdout.on('data', (d) => trozos.push(d));
+      hijo.stderr.on('data', (d) => { err += d.toString().slice(0, 500); });
+      hijo.on('error', reject);
+      hijo.on('close', (code) => {
+        if (code !== 0 && code !== 1) return reject(new Error(err.trim() || 'ripgrep falló'));
+        resolve(trozos.length ? Buffer.concat(trozos) : null);
+      });
+    });
+  }
+
+  /** Cuántas coincidencias había en un archivo antes de tocarlo. */
+  function contar(RG, opciones, ruta) {
+    const args = ['--count-matches', '--no-filename'];
+    if (opciones.literal) args.push('--fixed-strings');
+    if (opciones.palabraCompleta) args.push('--word-regexp');
+    args.push(opciones.sensible ? '--case-sensitive' : '--smart-case');
+    args.push('-e', opciones.patron, '--', ruta);
+    return new Promise((resolve) => {
+      const hijo = spawn(RG, args, { stdio: ['ignore', 'pipe', 'ignore'] });
+      let salida = '';
+      hijo.stdout.on('data', (d) => { salida += d; });
+      hijo.on('error', () => resolve(0));
+      hijo.on('close', () => resolve(
+        salida.split('\n').filter(Boolean).reduce((n, l) => n + (parseInt(l, 10) || 0), 0),
+      ));
+    });
+  }
 }

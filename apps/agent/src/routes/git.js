@@ -26,6 +26,13 @@ export default async function gitRoutes(app, { git }) {
   app.post('/api/git/discard', W, async (req) => (
     git.descartar(req.user, cwd(req), req.body?.paths)
   ));
+  app.post('/api/git/resolve', W, async (req) => (
+    git.resolver(req.user, cwd(req), req.body?.paths, req.body?.side)
+  ));
+  app.post('/api/git/sequencer', W, async (req) => (
+    git.seguir(req.user, cwd(req), req.body?.action)
+  ));
+
   app.post('/api/git/commit', W, async (req) => (
     git.commit(req.user, cwd(req), req.body?.message, {
       enmendar: !!req.body?.amend, todo: !!req.body?.all,

@@ -28,8 +28,8 @@ export function sandbox(layout = [], files = {}) {
 }
 
 /** Servicios del agente contra una base efímera, sin servidor HTTP. */
-export function services(sb, roots) {
-  const args = ['--db', sb.at('test.db')];
+export function services(sb, roots, extra = []) {
+  const args = ['--db', sb.at('test.db'), ...extra];
   for (const [name, path] of Object.entries(roots)) args.push('--root', `${name}=${sb.at(path)}`);
   const cfg = loadConfig(args);
   const svc = createServices(cfg);

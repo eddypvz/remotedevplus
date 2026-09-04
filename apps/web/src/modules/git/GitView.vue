@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import Icon from '../../ui/Icon.vue';
 import Loading from '../../ui/Loading.vue';
 import Empty from '../../ui/Empty.vue';
@@ -12,6 +12,7 @@ import { api, q } from '../../api';
 import { useGit } from '../../stores/git';
 import { useDialogo } from '../../stores/dialogo';
 import { useFiles } from '../../stores/files';
+import { useEventos } from '../../stores/eventos';
 
 /**
  * El gestor de git, a pantalla completa.
@@ -26,6 +27,7 @@ const props = defineProps<{ ctx: Record<string, unknown>; active: boolean }>();
 const git = useGit();
 const dialogo = useDialogo();
 const files = useFiles();
+const eventos = useEventos();
 
 const carpeta = computed(() => (props.ctx.cwd as string) || files.defaultCwd);
 const seleccionado = ref<string | null>(null);
@@ -145,6 +147,44 @@ const nuevaRama = ref('');
 onMounted(() => git.cargar(carpeta.value, true));
 watch(carpeta, (c) => git.cargar(c, true));
 watch(() => props.active, (a) => { if (a && git.cwd) git.cargar(git.cwd, false); });
+
+/*
+ * El panel se actualiza solo.
+ *
+ * El agente avisa por dos vías y las dos hacen falta: `.git` cubre lo que hace
+ * git —commit, checkout, stash, fetch, rebase, o un `git add` desde la
+ * terminal— y los directorios versionados cubren lo otro, que alguien edite un
+ * archivo y el árbol de trabajo deje de ser el que muestra el panel.
+ *
+ * Se recarga sin el grafo salvo que haya cambiado `HEAD`: pedir 300 commits,
+ * ramas y stash por cada tecla guardada sería absurdo. El grafo se recalcula
+ * cuando el estado dice que el commit actual es otro.
+ */
+let reloj: number | undefined;
+const soltarGit = eventos.onGitChanged((repo) => {
+  if (!props.active || repo !== git.cwd) return;
+  clearTimeout(reloj);
+  reloj = setTimeout(() => {
+    const antes = git.estado?.oidCorto;
+    const rama = git.estado?.rama;
+    git.cargar(git.cwd!, false).then(() => {
+      if (git.estado?.oidCorto !== antes || git.estado?.rama !== rama) {
+        git.cargar(git.cwd!, true);
+      }
+    });
+  }, 250) as unknown as number;
+});
+
+watch(carpeta, (nueva, vieja) => {
+  if (vieja) eventos.unwatchGit(vieja);
+  if (nueva) eventos.watchGit(nueva);
+}, { immediate: true });
+
+onBeforeUnmount(() => {
+  clearTimeout(reloj);
+  soltarGit();
+  if (carpeta.value) eventos.unwatchGit(carpeta.value);
+});
 </script>
 
 <template>

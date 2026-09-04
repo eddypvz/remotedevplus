@@ -8,7 +8,7 @@ import Loading from '../../ui/Loading.vue';
 import Composer from '../terminal/Composer.vue';
 import PillMenu from '../../ui/PillMenu.vue';
 import ChatMessage from './ChatMessage.vue';
-import Markdown from './Markdown.vue';
+import Markdown from '../../ui/Markdown.vue';
 import PermissionAsk from './PermissionAsk.vue';
 import PlanAsk from './PlanAsk.vue';
 import DocumentosModal from './DocumentosModal.vue';

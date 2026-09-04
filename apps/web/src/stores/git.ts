@@ -13,6 +13,8 @@ export interface GitArchivo {
 
 export interface GitEstado {
   rama: string | null;
+  /** Operación a medias parada en un conflicto, o null. */
+  operacion: 'merge' | 'rebase' | 'cherry-pick' | 'revert' | null;
   /** Sin rama: parado directamente en un commit. */
   desprendido: boolean;
   oidCorto: string;
@@ -118,6 +120,10 @@ export const useGit = defineStore('git', () => {
     subir: (force = false) => accion('/api/git/push', { force }),
     reordenar: (onto: string) => accion('/api/git/rebase', { onto }),
     situarse: (ref: string) => accion('/api/git/checkout', { ref }),
+    /** `side`: 'ours' o 'theirs' se quedan con un lado; 'manual' solo marca resuelto. */
+    resolver: (paths: string[], side: 'ours' | 'theirs' | 'manual') =>
+      accion('/api/git/resolve', { paths, side }),
+    seguir: (action: 'continuar' | 'abortar') => accion('/api/git/sequencer', { action }),
     diff: (path: string, staged: boolean) =>
       api.get<{ diff: string }>(`/api/git/diff?cwd=${q(cwd.value!)}&path=${q(path)}&staged=${staged ? 1 : 0}`),
   };

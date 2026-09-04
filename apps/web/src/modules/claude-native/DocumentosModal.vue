@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
 import Icon from '../../ui/Icon.vue';
-import Markdown from './Markdown.vue';
+import Markdown from '../../ui/Markdown.vue';
 import { api, q } from '../../api';
 import { useTabs } from '../../stores/tabs';
 

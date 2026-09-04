@@ -38,3 +38,23 @@ export async function copiar(texto: string): Promise<boolean> {
 
 /** Si no se puede copiar, conviene decir por qué en vez de fallar en silencio. */
 export const puedeCopiar = () => !!navigator.clipboard || !!document.execCommand;
+
+/**
+ * Leer del portapapeles. Devuelve `null` si el navegador no deja.
+ *
+ * Acá **no hay respaldo posible**. `execCommand('paste')` está bloqueado en
+ * todos los navegadores desde hace años, y con razón: leer el portapapeles sin
+ * que el usuario lo pida sería espiar lo que copió en cualquier otra
+ * aplicación. Sin contexto seguro no hay forma, y quien llama tiene que pedirle
+ * al usuario que pegue a mano.
+ */
+export async function leer(): Promise<string | null> {
+  try {
+    if (navigator.clipboard?.readText && window.isSecureContext) {
+      return await navigator.clipboard.readText();
+    }
+  } catch {
+    // Safari pide permiso y puede negarlo; se cae al pedido manual.
+  }
+  return null;
+}

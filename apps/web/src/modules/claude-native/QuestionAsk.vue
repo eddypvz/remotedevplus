@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
-import Markdown from './Markdown.vue';
+import Markdown from '../../ui/Markdown.vue';
 import type { PermissionAsk } from './useClaudeSocket';
 
 /**

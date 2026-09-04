@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import Icon from '../../ui/Icon.vue';
-import Markdown from './Markdown.vue';
+import Markdown from '../../ui/Markdown.vue';
 import type { PermissionAsk } from './useClaudeSocket';
 
 /**

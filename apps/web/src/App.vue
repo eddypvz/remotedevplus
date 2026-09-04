@@ -14,6 +14,7 @@ import { useTabs } from './stores/tabs';
 import { useWorkspaces } from './stores/workspaces';
 import { useFiles } from './stores/files';
 import { useLauncher } from './stores/launcher';
+import { useEventos } from './stores/eventos';
 
 const session = useSession();
 const layout = useLayout();
@@ -21,6 +22,7 @@ const tabs = useTabs();
 const workspaces = useWorkspaces();
 const files = useFiles();
 const launcher = useLauncher();
+const eventos = useEventos();
 
 /**
  * Al entrar sin workspace activo hay que elegir uno, y ahí el modal no se
@@ -43,6 +45,9 @@ const showPicker = computed(() => mustPick.value || workspaces.pickerOpen);
 const modalOpen = computed(() => showPicker.value || launcher.asking !== null);
 
 onMounted(async () => {
+  // Arrancó bien: se olvida la marca de recarga por chunk perdido, para que la
+  // red de seguridad siga disponible en el próximo despliegue.
+  try { sessionStorage.removeItem('rdp.recarga-por-chunk'); } catch { /* modo privado */ }
   layout.restore();
   tabs.restore();
   await session.bootstrap();
@@ -54,12 +59,34 @@ watch(() => tabs.active?.moduleId ?? null, (m) => layout.seguirALaPestana(m));
 
 // Los workspaces son por usuario, así que se cargan recién con la sesión lista.
 watch(() => session.authenticated, async (yes) => {
-  if (!yes) return;
+  if (!yes) {
+    eventos.dispose();
+    return;
+  }
+  // El canal de eventos también: sin sesión el agente lo rechazaría con un 401
+  // y el store entraría en un bucle de reintentos.
+  eventos.connect();
   await workspaces.load();
   if (workspaces.activeId !== null) files.openInitial();
 }, { immediate: true });
 
-onBeforeUnmount(() => window.removeEventListener('resize', layout.onResize));
+/*
+ * Al volver del segundo plano se reconecta ya.
+ *
+ * En una tablet la pestaña se suspende y el socket muere sin avisar: sin esto
+ * el explorador quedaría mudo hasta que venciera el backoff, justo en el
+ * momento en que el usuario mira la pantalla.
+ */
+function alDespertar() {
+  if (document.visibilityState === 'visible' && session.authenticated) eventos.wake();
+}
+document.addEventListener('visibilitychange', alDespertar);
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', layout.onResize);
+  document.removeEventListener('visibilitychange', alDespertar);
+  eventos.dispose();
+});
 </script>
 
 <template>

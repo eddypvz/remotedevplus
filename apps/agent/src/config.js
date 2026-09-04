@@ -45,6 +45,15 @@ export function loadConfig(argv = []) {
   if (process.env.REMOTEDEVPLUS_PORT) cfg.port = Number(process.env.REMOTEDEVPLUS_PORT);
   if (process.env.REMOTEDEVPLUS_HOST) cfg.host = process.env.REMOTEDEVPLUS_HOST;
   if (process.env.REMOTEDEVPLUS_DB) cfg.dbPath = resolve(process.env.REMOTEDEVPLUS_DB);
+  // TLS por variable de entorno, para que la unidad de systemd lo active sin
+  // tocar el archivo de config —que es de la máquina y no se commitea.
+  if (process.env.REMOTEDEVPLUS_TLS_CERT) {
+    cfg.tls = { ...(cfg.tls || {}), cert: resolve(process.env.REMOTEDEVPLUS_TLS_CERT) };
+  }
+  if (process.env.REMOTEDEVPLUS_TLS_KEY) {
+    cfg.tls = { ...(cfg.tls || {}), key: resolve(process.env.REMOTEDEVPLUS_TLS_KEY) };
+  }
+  if (process.env.REMOTEDEVPLUS_TRUST_PROXY === '1') cfg.trustProxy = true;
 
   const roots = [];
   for (let i = 0; i < argv.length; i++) {
@@ -80,7 +89,14 @@ export function loadConfig(argv = []) {
   if (!cfg.roots.length) cfg.roots = [parseRoot(homedir())];
 
   if (cfg.tls && (!cfg.tls.cert || !cfg.tls.key)) {
-    throw new Error('TLS necesita --tls-cert y --tls-key juntos');
+    throw new Error('TLS necesita el certificado y la llave juntos');
+  }
+  // Se comprueba acá y no al abrir el socket: fallar con "ENOENT" en medio del
+  // arranque no dice cuál de los dos archivos falta ni dónde se lo buscó.
+  for (const cual of ['cert', 'key']) {
+    if (cfg.tls && !existsSync(cfg.tls[cual])) {
+      throw new Error(`No se encontró ${cual === 'cert' ? 'el certificado' : 'la llave'} de TLS en ${cfg.tls[cual]}`);
+    }
   }
   return cfg;
 }

@@ -16,8 +16,11 @@
  * @property {(p: string) => Promise<{content: string, encoding: string, size: number}>} readFile
  * @property {(p: string, content: string) => Promise<void>} writeFile
  * @property {(p: string) => Promise<void>} mkdir
+ * @property {(from: string, to: string) => Promise<void>} copy
+ * @property {(p: string, buf: Buffer) => Promise<void>} writeBytes
  * @property {(p: string, recursive: boolean) => Promise<void>} remove
  * @property {(from: string, to: string) => Promise<void>} rename
+ * @property {(dir: string, onChange: () => void) => (() => void)} watch
  * @property {(opts: object) => object} spawnPty
  * @property {(cmd: string, args: string[], opts?: object) => Promise<{code: number, stdout: string, stderr: string}>} exec
  */

@@ -1,5 +1,5 @@
 # EJEMPLO. remotedevplus no lee ni escribe este archivo: el agente se sirve a sí
-# mismo, y un proxy inverso es opcional (modo C). Si no querés proxy, arrancá el
+# mismo, y un proxy inverso es opcional (modo C). Si no desea un proxy, arranque el
 # agente con --tls-cert/--tls-key y listo.
 #
 # Con proxy hay que arrancar el agente con --trust-proxy para que vea la IP real

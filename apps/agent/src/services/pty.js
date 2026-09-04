@@ -54,7 +54,7 @@ class Ring {
   }
 }
 
-export function createPty(hosts, cfg, audit) {
+export function createPty(hosts, cfg, audit, events = null) {
   /** @type {Map<string, object>} */
   const sessions = new Map();
 
@@ -147,6 +147,9 @@ export function createPty(hosts, cfg, audit) {
       const msg = JSON.stringify({ t: PTY_CONTROL.EXIT, code: exitCode, signal });
       for (const ws of s.clients) { if (ws.readyState === 1) ws.send(msg); }
       audit.log(s.userId, 'pty.exit', { id, kind, code: exitCode });
+      // El panel de terminales tiene que enterarse aunque su pestaña no esté
+      // abierta: un `exit` en una terminal de fondo deja la lista mintiendo.
+      events?.ptyExit(publicShape(s));
       s.reapTimer = setTimeout(() => sessions.delete(id), REAP_AFTER_EXIT_MS);
       s.reapTimer.unref?.();
     });

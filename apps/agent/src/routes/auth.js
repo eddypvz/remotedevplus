@@ -10,9 +10,15 @@ export default async function authRoutes(app, { auth, cfg }) {
       path: cfg.basePath,
       httpOnly: true,
       sameSite: 'lax',
-      // Sin TLS el navegador descartaría una cookie `secure`, y el modo A
-      // (HTTP en loopback) dejaría de funcionar.
-      secure: !!cfg.tls,
+      /*
+       * Sin TLS el navegador descartaría una cookie `secure`, y el modo A
+       * (HTTP en loopback) dejaría de funcionar. Pero detrás de un proxy que
+       * termina TLS, el agente habla HTTP y el navegador HTTPS: mirar solo la
+       * config propia dejaría la cookie sin marcar en una conexión que sí es
+       * segura. Por eso también se mira el protocolo real del request, que
+       * Fastify deduce de `X-Forwarded-Proto` cuando se confía en el proxy.
+       */
+      secure: !!cfg.tls || (cfg.trustProxy && req.protocol === 'https'),
       maxAge: cfg.sessionTtlDays * 86400,
     });
     return { user };

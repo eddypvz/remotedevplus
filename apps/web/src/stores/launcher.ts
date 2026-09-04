@@ -2,6 +2,7 @@ import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import { useTabs } from './tabs';
 import { useWorkspaces } from './workspaces';
+import { useTerminals } from './terminals';
 import { getModule } from '../modules';
 import type { WorkspaceFolder } from './workspaces';
 
@@ -14,6 +15,7 @@ import type { WorkspaceFolder } from './workspaces';
 export const useLauncher = defineStore('launcher', () => {
   const tabs = useTabs();
   const workspaces = useWorkspaces();
+  const terminals = useTerminals();
 
   /** Módulo esperando que se elija carpeta, o null. */
   const asking = ref<string | null>(null);
@@ -54,6 +56,12 @@ export const useLauncher = defineStore('launcher', () => {
     const destino = opts.engine || moduleId;
     if (!destino) return;
     asking.value = null;
+    // Una terminal siempre es una nueva: la sesión se crea primero y la pestaña
+    // se identifica por ella, así dos terminales en la misma carpeta conviven.
+    if (destino === 'terminal') {
+      terminals.abrir(folder.path, folder.name);
+      return;
+    }
     tabs.open(destino, { cwd: folder.path, label: folder.name });
   }
 

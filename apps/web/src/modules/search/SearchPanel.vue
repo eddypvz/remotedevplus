@@ -3,6 +3,9 @@ import { ref, computed, onBeforeUnmount } from 'vue';
 import Icon from '../../ui/Icon.vue';
 import { useWorkspaces } from '../../stores/workspaces';
 import { useTabs } from '../../stores/tabs';
+import { useSession } from '../../stores/session';
+import { useDialogo } from '../../stores/dialogo';
+import { api } from '../../api';
 
 /**
  * Buscador global.
@@ -17,6 +20,8 @@ import { useTabs } from '../../stores/tabs';
  */
 const workspaces = useWorkspaces();
 const tabs = useTabs();
+const session = useSession();
+const dialogo = useDialogo();
 
 interface Coincidencia { ruta: string; linea: number; texto: string; partes: { desde: number; hasta: number }[] }
 interface Grupo { ruta: string; coincidencias: Coincidencia[] }
@@ -27,6 +32,17 @@ const opciones = ref(false);
 const literal = ref(true);
 const sensible = ref(false);
 const palabraCompleta = ref(false);
+
+/*
+ * El reemplazo lo hace ripgrep en el agente, con el MISMO patrón y las mismas
+ * banderas con las que buscó. No se manda una lista de posiciones: entre que se
+ * pintó el resultado y se toca el botón, el archivo puede haber cambiado, y
+ * escribir en un desplazamiento viejo corrompe en silencio.
+ */
+const reemplazo = ref('');
+const mostrarReemplazo = ref(false);
+const reemplazando = ref(false);
+const puedeReemplazar = computed(() => session.can('fs:write'));
 
 const grupos = ref<Grupo[]>([]);
 const total = ref(0);
@@ -131,6 +147,63 @@ function abrir(c: Coincidencia) {
   tabs.open('file', { path: c.ruta, linea: c.linea });
 }
 
+/** El cuerpo que describe esta búsqueda; el reemplazo la repite tal cual. */
+const consulta = () => ({
+  cwds: carpetas.value,
+  patron: patron.value.trim(),
+  literal: literal.value,
+  sensible: sensible.value,
+  palabraCompleta: palabraCompleta.value,
+  incluir: incluir.value,
+});
+
+/**
+ * Reemplaza en todo lo encontrado, o en un solo archivo.
+ *
+ * Siempre pregunta: no hay deshacer, y una expresión regular mal escrita puede
+ * tocar cientos de archivos. El diálogo dice cuántos, que es el dato que hace
+ * dudar a tiempo.
+ */
+async function reemplazarTodo(soloRuta?: string) {
+  if (!patron.value.trim() || !grupos.value.length) return;
+  const objetivo = soloRuta ? grupos.value.filter((g) => g.ruta === soloRuta) : grupos.value;
+  const nArchivos = objetivo.length;
+  const nCoincidencias = objetivo.reduce((n, g) => n + g.coincidencias.length, 0);
+
+  const ok = await dialogo.confirmar({
+    titulo: 'Reemplazar en el disco',
+    mensaje: `Se cambiarán ${nCoincidencias} coincidencia${nCoincidencias === 1 ? '' : 's'} `
+      + `en ${nArchivos} archivo${nArchivos === 1 ? '' : 's'}. No hay deshacer: `
+      + 'conviene tener el trabajo en git antes.',
+    detalle: `${patron.value}\n  →  ${reemplazo.value || '(vacío: se borra lo encontrado)'}`,
+    aceptar: 'Reemplazar',
+    peligroso: true,
+  });
+  if (!ok) return;
+
+  reemplazando.value = true;
+  try {
+    const r = await api.post<{ archivos: number; sustituciones: number; fallos: { ruta: string; motivo: string }[] }>(
+      '/api/search/replace',
+      { ...consulta(), replacement: reemplazo.value, paths: soloRuta ? [soloRuta] : undefined },
+    );
+    fin.value = {
+      errores: r.fallos.length
+        ? `${r.fallos.length} archivo(s) no se pudieron reescribir: ${r.fallos[0].motivo}`
+        : undefined,
+    };
+    // Se vuelve a buscar: lo que queda en pantalla ya no existe en el disco.
+    await buscar();
+    if (!r.fallos.length) {
+      fin.value = { motivo: `Se reemplazaron ${r.sustituciones} en ${r.archivos} archivo(s)` };
+    }
+  } catch (e: any) {
+    fin.value = { errores: e?.message || 'No se pudo reemplazar' };
+  } finally {
+    reemplazando.value = false;
+  }
+}
+
 function plegar(ruta: string) {
   const s = new Set(plegados.value);
   s.has(ruta) ? s.delete(ruta) : s.add(ruta);
@@ -153,10 +226,31 @@ onBeforeUnmount(cancelar);
           v-if="buscando" type="button" class="parar" title="Cancelar" @click="cancelar"
         ><Icon name="close" :size="13" /></button>
       </label>
+      <button
+        v-if="puedeReemplazar" type="button" class="mas" :class="{ on: mostrarReemplazo }"
+        title="Reemplazar" @click="mostrarReemplazo = !mostrarReemplazo"
+      >⇄</button>
       <button type="button" class="mas" :class="{ on: opciones }" title="Opciones" @click="opciones = !opciones">
         <Icon name="settings" :size="14" />
       </button>
     </form>
+
+    <div v-if="mostrarReemplazo && puedeReemplazar" class="campo reemplazo">
+      <label class="caja">
+        <span class="flecha">→</span>
+        <input
+          v-model="reemplazo"
+          :placeholder="literal ? 'Reemplazar por…' : 'Reemplazar por…  ${1} para los grupos'"
+          spellcheck="false" autocapitalize="off" autocorrect="off"
+          @keydown.enter.prevent="reemplazarTodo()"
+        >
+      </label>
+      <button
+        type="button" class="hacer" :disabled="!grupos.length || reemplazando || buscando"
+        :title="grupos.length ? `Reemplazar en ${grupos.length} archivo(s)` : 'Primero hay que buscar'"
+        @click="reemplazarTodo()"
+      >{{ reemplazando ? '…' : 'todo' }}</button>
+    </div>
 
     <div v-if="opciones" class="opciones">
       <input v-model="incluir" class="glob" placeholder="*.php, src/**  (dejar vacío = todo)" spellcheck="false">
@@ -178,11 +272,18 @@ onBeforeUnmount(cancelar);
 
     <div class="resultados rdp-scroll">
       <div v-for="g in grupos" :key="g.ruta" class="grupo">
-        <button class="archivo" @click="plegar(g.ruta)">
-          <Icon name="chevron" :size="12" :style="{ transform: plegados.has(g.ruta) ? 'none' : 'rotate(90deg)' }" />
-          <span class="ruta">{{ rel(g.ruta) }}</span>
-          <span class="n">{{ g.coincidencias.length }}</span>
-        </button>
+        <div class="cabecera">
+          <button class="archivo" @click="plegar(g.ruta)">
+            <Icon name="chevron" :size="12" :style="{ transform: plegados.has(g.ruta) ? 'none' : 'rotate(90deg)' }" />
+            <span class="ruta">{{ rel(g.ruta) }}</span>
+            <span class="n">{{ g.coincidencias.length }}</span>
+          </button>
+          <button
+            v-if="mostrarReemplazo && puedeReemplazar" class="soloEste"
+            :disabled="reemplazando" title="Reemplazar solo en este archivo"
+            @click.stop="reemplazarTodo(g.ruta)"
+          >⇄</button>
+        </div>
         <template v-if="!plegados.has(g.ruta)">
           <button v-for="c in g.coincidencias" :key="c.linea + ':' + c.texto" class="linea" @click="abrir(c)">
             <span class="num">{{ c.linea }}</span>
@@ -237,7 +338,26 @@ onBeforeUnmount(cancelar);
 
 .resultados { flex: 1; min-height: 0; padding-bottom: 14px; }
 
+.campo.reemplazo { padding-top: 0; }
+.reemplazo .flecha { flex: 0 0 auto; font-size: 13px; color: var(--fg-faint); }
+.hacer {
+  flex: 0 0 auto; min-width: 46px; height: 30px; padding: 0 10px;
+  background: var(--bg-surface); border: 1px solid var(--border-strong);
+  border-radius: 8px; font-size: 12px; color: var(--fg-dim);
+}
+.hacer:hover:not(:disabled) { border-color: var(--danger); color: var(--danger); }
+.hacer:disabled { opacity: .4; cursor: default; }
+
+.cabecera { display: flex; align-items: center; }
+.soloEste {
+  flex: 0 0 auto; width: 28px; height: 26px; margin-right: 4px;
+  border-radius: 6px; color: var(--fg-faint); font-size: 13px;
+}
+.soloEste:hover:not(:disabled) { background: var(--bg-active); color: var(--danger); }
+.soloEste:disabled { opacity: .4; }
+
 .grupo { display: flex; flex-direction: column; }
+.cabecera .archivo { flex: 1; min-width: 0; }
 .archivo {
   display: flex; align-items: center; gap: 6px;
   position: sticky; top: 0; z-index: 1;

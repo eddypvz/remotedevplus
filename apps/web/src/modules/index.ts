@@ -2,9 +2,34 @@ import { defineAsyncComponent, markRaw } from 'vue';
 import type { ActivityItem, ModuleDef, PanelDef } from '../types';
 import Loading from '../ui/Loading.vue';
 
-/** Cada módulo llega en su propio chunk: el gestor de git no se descarga hasta abrirlo. */
+/**
+ * Cada módulo llega en su propio chunk: el gestor de git no se descarga hasta
+ * abrirlo.
+ *
+ * Si el chunk no se puede cargar se recarga la página una vez. El caso real no
+ * es la red: es un despliegue con la pestaña abierta. El build cambia el hash
+ * de cada chunk, así que la pestaña vieja pide archivos que ya no existen y el
+ * módulo no abre nunca. Recargar trae el index nuevo y se resuelve solo.
+ *
+ * La marca en `sessionStorage` corta el bucle: si recargar tampoco alcanzó, el
+ * problema es otro y hay que dejar que el error se vea.
+ */
+const RECARGA = 'rdp.recarga-por-chunk';
+
 const lazy = (loader: () => Promise<any>) =>
-  markRaw(defineAsyncComponent({ loader, loadingComponent: Loading, delay: 120 }));
+  markRaw(defineAsyncComponent({
+    loader: () => loader().catch((e) => {
+      try {
+        if (!sessionStorage.getItem(RECARGA)) {
+          sessionStorage.setItem(RECARGA, '1');
+          location.reload();
+        }
+      } catch { /* modo privado: se deja pasar el error */ }
+      throw e;
+    }),
+    loadingComponent: Loading,
+    delay: 120,
+  }));
 
 const basename = (p?: string) => (p ? p.split('/').filter(Boolean).pop() || p : 'sin título');
 
@@ -68,6 +93,7 @@ export const MODULES: ModuleDef[] = [
     component: lazy(() => import('./git/GitView.vue')),
   },
   {
+    // Sin icono en el rail hasta que tenga contenido; ver la nota en ACTIVITY.
     id: 'db',
     requires: 'module:db',
     icon: 'database',
@@ -104,6 +130,14 @@ export const PANELS: PanelDef[] = [
     component: lazy(() => import('./claude-native/SessionsPanel.vue')),
   },
   {
+    id: 'terminal',
+    label: 'Terminales',
+    icon: 'terminal',
+    requires: 'module:terminal',
+    owner: 'terminal',
+    component: lazy(() => import('./terminal/TerminalsPanel.vue')),
+  },
+  {
     id: 'search',
     label: 'Buscar',
     icon: 'search',
@@ -129,7 +163,17 @@ export const ACTIVITY: ActivityItem[] = [
   // pertenece, para que el icono lleve a la pestaña que ya existe de ese módulo
   // además de abrir su panel.
   { id: 'claude', label: 'Claude Code', icon: 'claude', kind: 'panel', moduleId: 'claude-native', requires: 'module:claude' },
-  { id: 'db', label: 'Base de datos', icon: 'database', kind: 'launcher', moduleId: 'db', requires: 'module:db' },
+  // Panel y no lanzador, por lo mismo que Claude: con varias terminales vivas lo
+  // normal es volver a una, no abrir otra. La nueva se pide desde el listado.
+  { id: 'terminal', label: 'Terminales', icon: 'terminal', kind: 'panel', moduleId: 'terminal', requires: 'module:terminal' },
+  /*
+   * El icono de base de datos no está en el rail.
+   *
+   * El módulo es un placeholder: un icono que abre una pestaña vacía promete
+   * algo que no existe, y en una barra de seis iconos eso se nota. El módulo
+   * sigue registrado arriba a propósito, para que una pestaña guardada de antes
+   * no desaparezca al restaurar; se vuelve a poner acá cuando tenga contenido.
+   */
   { id: 'users', label: 'Usuarios', icon: 'users', kind: 'launcher', moduleId: 'users', requires: 'users:manage', slot: 'bottom' },
   { id: 'settings', label: 'Ajustes', icon: 'settings', kind: 'panel', slot: 'bottom' },
 ];

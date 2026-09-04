@@ -16,7 +16,7 @@ describe('saneado del markdown', () => {
   globalThis.document = dom.window.document;
 
   test('deja pasar el markdown legítimo', async () => {
-    const { renderMarkdown } = await import('../apps/web/src/modules/claude-native/markdown.ts');
+    const { renderMarkdown } = await import('../apps/web/src/ui/markdown.ts');
     const html = renderMarkdown('## Título\n\nTexto con `código` y **negrita**.\n\n- uno\n- dos');
     assert.match(html, /<h2[^>]*>Título<\/h2>/);
     assert.match(html, /<code>código<\/code>/);
@@ -25,7 +25,7 @@ describe('saneado del markdown', () => {
   });
 
   test('bloquea lo peligroso', async () => {
-    const { renderMarkdown } = await import('../apps/web/src/modules/claude-native/markdown.ts');
+    const { renderMarkdown } = await import('../apps/web/src/ui/markdown.ts');
     const casos = [
       ['script suelto', '<script>alert(1)</script>'],
       ['imagen con onerror', '<img src=x onerror="alert(1)">'],
@@ -45,8 +45,23 @@ describe('saneado del markdown', () => {
     }
   });
 
+  test('un archivo no corta las líneas donde el autor las envolvió', async () => {
+    const { renderMarkdown } = await import('../apps/web/src/ui/markdown.ts');
+    const parrafo = 'Una frase larga que el autor\nenvolvió a ochenta columnas\ncomo se hace en un README.';
+
+    // Por defecto, sin saltos duros: es un párrafo, no tres líneas. Con
+    // `breaks` activo un README se vería dentado, con un corte por cada línea
+    // del archivo fuente.
+    const documento = renderMarkdown(parrafo);
+    assert.equal(documento.includes('<br'), false, 'metió saltos donde no los hay');
+
+    // En el chat sí: quien escribe un mensaje espera que sus saltos se vean.
+    const mensaje = renderMarkdown(parrafo, { duros: true });
+    assert.ok(mensaje.includes('<br'), 'perdió los saltos del mensaje');
+  });
+
   test('los enlaces se abren afuera', async () => {
-    const { renderMarkdown } = await import('../apps/web/src/modules/claude-native/markdown.ts');
+    const { renderMarkdown } = await import('../apps/web/src/ui/markdown.ts');
     const html = renderMarkdown('[docs](https://example.com)');
     assert.match(html, /target="_blank"/);
     assert.match(html, /rel="noopener noreferrer"/);

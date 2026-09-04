@@ -96,6 +96,60 @@ async function hacerCommit() {
   });
 }
 
+/*
+ * CONFLICTOS
+ *
+ * `ours` y `theirs` significan lo contrario según la operación: en un merge
+ * "ours" es la rama en la que se está, y en un rebase es el commit que se está
+ * aplicando encima. Por eso los botones se nombran según la operación en curso
+ * en vez de decir "el mío" y "el de ellos", que en un rebase engaña.
+ */
+const LADOS = {
+  merge: { ours: 'esta branch', theirs: 'la que entra' },
+  rebase: { ours: 'sobre la que rebaso', theirs: 'mi commit' },
+  'cherry-pick': { ours: 'esta branch', theirs: 'el commit' },
+  revert: { ours: 'esta branch', theirs: 'el revert' },
+} as const;
+
+const ladoNombre = (side: 'ours' | 'theirs') => (
+  LADOS[e.value?.operacion ?? 'merge']?.[side] ?? (side === 'ours' ? 'lo nuestro' : 'lo suyo')
+);
+
+const OPERACION: Record<string, string> = {
+  merge: 'Un merge quedó a medias',
+  rebase: 'Un rebase quedó a medias',
+  'cherry-pick': 'Un cherry-pick quedó a medias',
+  revert: 'Un revert quedó a medias',
+};
+
+async function resolver(ruta: string, side: 'ours' | 'theirs' | 'manual') {
+  if (side === 'manual') return con(() => git.resolver([ruta], 'manual'));
+  const ok = await dialogo.confirmar({
+    titulo: `Quedarse con ${ladoNombre(side)}`,
+    mensaje: 'Se descarta por completo el otro lado en este archivo y queda resuelto (staged). '
+      + 'No se puede deshacer sin volver a empezar la operación.',
+    detalle: ruta,
+    aceptar: 'Quedarme con este', peligroso: true,
+  });
+  if (!ok) return;
+  await con(() => git.resolver([ruta], side));
+}
+
+async function seguir(accion: 'continuar' | 'abortar') {
+  if (accion === 'abortar') {
+    const ok = await dialogo.confirmar({
+      titulo: 'Abortar la operación',
+      mensaje: 'El repositorio vuelve a como estaba antes de empezar. Lo resuelto hasta ahora se pierde.',
+      aceptar: 'Abortar', peligroso: true,
+    });
+    if (!ok) return;
+  }
+  await con(async () => {
+    await git.seguir(accion);
+    await git.cargar(git.cwd!, true);
+  });
+}
+
 async function descartar(lista: GitArchivo[]) {
   const n = lista.length;
   const ok = await dialogo.confirmar({
@@ -206,12 +260,52 @@ async function descartar(lista: GitArchivo[]) {
         <span class="titulo">Conflicts</span>
         <span class="cuenta">{{ e.conflictos.length }}</span>
       </header>
-      <div v-for="a in e.conflictos" :key="a.ruta" class="fila" @click="tabs.open('file', { path: git.cwd + '/' + a.ruta })">
-        <span class="letra malo">!</span>
-        <span class="nombre">{{ nombre(a.ruta) }}</span>
-        <span class="carpeta">{{ carpeta(a.ruta) }}</span>
+      <div v-for="a in e.conflictos" :key="a.ruta" class="conflicto">
+        <div class="fila" @click="tabs.open('file', { path: git.cwd + '/' + a.ruta })">
+          <span class="letra malo">!</span>
+          <span class="nombre">{{ nombre(a.ruta) }}</span>
+          <span class="carpeta">{{ carpeta(a.ruta) }}</span>
+        </div>
+        <!--
+          Los tres caminos reales: quedarse con un lado entero, o editar el
+          archivo a mano y decir que ya está. Un editor de tres paneles sería
+          mejor, pero en tablet no entra; abrir el archivo con sus marcadores sí.
+        -->
+        <div class="lados">
+          <button :disabled="trabajando" @click.stop="resolver(a.ruta, 'ours')">
+            usar {{ ladoNombre('ours') }}
+          </button>
+          <button :disabled="trabajando" @click.stop="resolver(a.ruta, 'theirs')">
+            usar {{ ladoNombre('theirs') }}
+          </button>
+          <button class="listo" :disabled="trabajando" title="Ya lo edité a mano" @click.stop="resolver(a.ruta, 'manual')">
+            resuelto
+          </button>
+        </div>
       </div>
     </section>
+
+    <!--
+      Cuando ya no quedan conflictos, lo único que falta es continuar. El aviso
+      aparece igual con conflictos pendientes, porque abortar tiene que estar a
+      mano en todo momento.
+    -->
+    <div v-if="e?.operacion" class="secuencia">
+      <p>
+        <Icon name="alert" :size="14" />
+        {{ OPERACION[e.operacion] ?? 'Una operación quedó a medias' }}<span
+          v-if="e.conflictos.length"
+        >: quedan {{ e.conflictos.length }} conflicto{{ e.conflictos.length === 1 ? '' : 's' }}</span>.
+      </p>
+      <div class="botones">
+        <button
+          class="seguir" :disabled="trabajando || !!e.conflictos.length"
+          :title="e.conflictos.length ? 'Primero hay que resolver los conflictos' : 'Continuar la operación'"
+          @click="seguir('continuar')"
+        >continuar</button>
+        <button class="abortar" :disabled="trabajando" @click="seguir('abortar')">abortar</button>
+      </div>
+    </div>
 
     <p v-if="!git.hayTrabajo" class="limpio">
       <Icon name="chevron" :size="14" /> No hay cambios sin commit.
@@ -314,6 +408,42 @@ async function descartar(lista: GitArchivo[]) {
 .acto:hover { background: var(--bg-active); color: var(--fg); }
 .acto.sumar:hover { color: var(--ok); }
 .acto.mal:hover { color: var(--danger); }
+
+.conflicto { display: flex; flex-direction: column; }
+.lados {
+  display: flex; gap: 5px; flex-wrap: wrap;
+  padding: 0 12px 8px 30px;
+}
+.lados button {
+  flex: 0 1 auto; min-height: 28px; padding: 0 10px;
+  background: var(--bg-surface); border: 1px solid var(--border-strong);
+  border-radius: 7px; font-size: 11.5px; color: var(--fg-dim); white-space: nowrap;
+}
+.lados button:hover:not(:disabled) { border-color: var(--danger); color: var(--danger); }
+.lados button.listo:hover:not(:disabled) { border-color: var(--ok); color: var(--ok); }
+.lados button:disabled { opacity: .45; cursor: default; }
+
+.secuencia {
+  display: flex; flex-direction: column; gap: 8px; flex: 0 0 auto;
+  margin: 8px 10px; padding: 10px 12px;
+  background: color-mix(in oklab, var(--warn) 12%, transparent);
+  border: 1px solid color-mix(in oklab, var(--warn) 40%, transparent);
+  border-radius: 10px;
+}
+.secuencia p {
+  display: flex; align-items: center; gap: 7px; margin: 0;
+  font-size: 12.5px; line-height: 1.5; color: var(--fg);
+}
+.secuencia :deep(svg) { flex: 0 0 auto; color: var(--warn); }
+.secuencia .botones { display: flex; gap: 6px; }
+.secuencia button {
+  min-height: 30px; padding: 0 12px; border-radius: 8px;
+  font-size: 12px; font-weight: 550;
+}
+.secuencia .seguir { background: var(--accent); color: var(--on-accent); }
+.secuencia .abortar { background: var(--bg-surface); border: 1px solid var(--border-strong); color: var(--fg-dim); }
+.secuencia .abortar:hover:not(:disabled) { border-color: var(--danger); color: var(--danger); }
+.secuencia button:disabled { opacity: .45; cursor: default; }
 
 .limpio {
   display: flex; align-items: center; gap: 7px; justify-content: center;

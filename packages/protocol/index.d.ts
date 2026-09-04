@@ -104,6 +104,7 @@ export const EVENTS: {
 };
 export const LIMITS: {
   PTY_RING_BYTES: number; FILE_READ_MAX: number; DIR_ENTRIES_MAX: number;
+  FILE_UPLOAD_MAX: number;
 };
 
 export interface UserRoot { name: string; path: string; host?: string }
