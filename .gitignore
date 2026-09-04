@@ -1,0 +1,9 @@
+node_modules/
+dist/
+data/*.db
+data/*.db-*
+.env
+*.log
+
+# Config de cada máquina; se versiona el .example
+remotedevplus.config.json

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <!-- viewport-fit=cover + safe-area insets: sin esto el rail queda debajo del
+       notch en iPad. user-scalable=no evita que el pinch-zoom del navegador
+       pelee con el gesto de zoom dentro del terminal. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+  <meta name="color-scheme" content="light dark">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>remotedevplus</title>
+</head>
+<body>
+  <div id="app"></div>
+  <script>
+    // El tema se aplica ANTES de que Vue monte. Si esperara al store, abrir la
+    // app en oscuro daría un fogonazo blanco de un frame — que a las 6am se
+    // nota bastante. Tiene que quedar en línea con stores/settings.ts.
+    (function () {
+      var pref = 'system';
+      try { pref = localStorage.getItem('rdp.theme') || 'system'; } catch (e) {}
+      var dark = pref === 'dark' ||
+        (pref === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+      document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    })();
+  </script>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

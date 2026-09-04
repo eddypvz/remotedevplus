@@ -1,0 +1,21 @@
+{
+  "_": "Copiar a remotedevplus.config.json. Es específico de cada máquina, así que está en .gitignore. Los flags de la CLI ganan sobre este archivo.",
+
+  "host": "127.0.0.1",
+  "port": 8790,
+
+  "roots": [
+    { "name": "www", "path": "/var/www" },
+    { "name": "home", "path": "~" }
+  ],
+
+  "_tls": "Descomentar para HTTPS directo, sin proxy inverso. Recomendado: sin secure context el portapapeles del navegador no funciona.",
+  "tls": null,
+
+  "_trustProxy": "Ponerlo en true SOLO si hay un proxy inverso adelante; si no, el rate limit de login contaría todos los intentos contra la IP del proxy.",
+  "trustProxy": false,
+
+  "sessionTtlDays": 30,
+  "loginMaxAttempts": 10,
+  "loginLockoutMinutes": 15
+}

@@ -1,0 +1,31 @@
+{
+  "name": "remotedevplus",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "npm run build -w @remotedevplus/web",
+    "dev": "node scripts/dev.mjs",
+    "serve": "node apps/agent/src/cli.js serve",
+    "user": "node apps/agent/src/cli.js user",
+    "typecheck": "npm run typecheck -w @remotedevplus/web",
+    "test": "node --test 'tests/*.test.js'",
+    "check": "npm run typecheck && npm run build && npm test",
+    "sdk:check": "node scripts/sdk-surface.mjs check",
+    "sdk:snapshot": "node scripts/sdk-surface.mjs snapshot"
+  },
+  "allowScripts": {
+    "@homebridge/node-pty-prebuilt-multiarch@0.14.1": true,
+    "esbuild@0.28.2": true,
+    "@vscode/ripgrep@1.18.0": true
+  },
+  "devDependencies": {
+    "jsdom": "^30.0.1"
+  }
+}

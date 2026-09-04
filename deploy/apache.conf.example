@@ -1,0 +1,24 @@
+# EJEMPLO. Ver la nota de nginx.conf.example: esto es opcional (modo C).
+# Necesita: a2enmod proxy proxy_http proxy_wstunnel headers
+#
+# El orden importa: las reglas de WebSocket van ANTES del ProxyPass general, o
+# el proxy_http se queda con el upgrade y el terminal no conecta.
+
+<VirtualHost *:443>
+    ServerName remodev.ejemplo.com
+
+    SSLEngine on
+    SSLCertificateFile    /etc/ssl/certs/remodev.crt
+    SSLCertificateKeyFile /etc/ssl/private/remodev.key
+
+    ProxyPreserveHost On
+    RequestHeader set X-Forwarded-Proto "https"
+
+    ProxyPass        /ws/ ws://127.0.0.1:8790/ws/ timeout=86400
+    ProxyPassReverse /ws/ ws://127.0.0.1:8790/ws/
+
+    ProxyPass        / http://127.0.0.1:8790/ timeout=86400
+    ProxyPassReverse / http://127.0.0.1:8790/
+
+    ErrorLog ${APACHE_LOG_DIR}/remodev-error.log
+</VirtualHost>

@@ -1,0 +1,7 @@
+# EJEMPLO. Caddy es la opción con menos configuración: consigue el certificado
+# solo y pasa los WebSocket sin reglas aparte.
+remodev.ejemplo.com {
+	reverse_proxy 127.0.0.1:8790 {
+		flush_interval -1
+	}
+}

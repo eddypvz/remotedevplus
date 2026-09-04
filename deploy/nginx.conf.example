@@ -1,0 +1,33 @@
+# EJEMPLO. remotedevplus no lee ni escribe este archivo: el agente se sirve a sí
+# mismo, y un proxy inverso es opcional (modo C). Si no querés proxy, arrancá el
+# agente con --tls-cert/--tls-key y listo.
+#
+# Con proxy hay que arrancar el agente con --trust-proxy para que vea la IP real
+# del cliente; sin eso, el rate limit de login contaría todos los intentos
+# contra la IP del proxy.
+
+server {
+    listen 443 ssl;
+    http2 on;
+    server_name remodev.ejemplo.com;
+
+    ssl_certificate     /etc/ssl/certs/remodev.crt;
+    ssl_certificate_key /etc/ssl/private/remodev.key;
+
+    location / {
+        proxy_pass http://127.0.0.1:8790;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # El WebSocket del PTY vive horas y puede estar callado mientras Claude
+        # Code piensa: sin estos timeouts largos, el proxy corta la sesión.
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout  24h;
+        proxy_send_timeout  24h;
+        proxy_buffering off;
+    }
+}
