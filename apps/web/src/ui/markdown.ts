@@ -1,0 +1,38 @@
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
+
+/**
+ * Markdown a HTML, saneado.
+ *
+ * El saneado no es opcional aunque el texto venga de Claude: los resultados de
+ * herramientas traen contenido de archivos del proyecto, y un archivo puede
+ * contener cualquier cosa. Sin DOMPurify, leer un HTML del repo ejecutaría su
+ * script dentro de la aplicación.
+ */
+marked.setOptions({ gfm: true });
+
+/** Se abren en pestaña nueva: un enlace no debe sacarte de la conversación. */
+DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+  if (node.tagName === 'A') {
+    node.setAttribute('target', '_blank');
+    node.setAttribute('rel', 'noopener noreferrer');
+  }
+});
+
+/**
+ * `duros` controla si un salto de línea suelto se convierte en `<br>`.
+ *
+ * En el chat sí: quien escribe un mensaje espera que sus saltos se respeten.
+ * En un archivo del repositorio no, y la diferencia se ve: un README con los
+ * párrafos cortados a 80 columnas se renderizaría con un corte por línea,
+ * dentado y feo, en vez de párrafos justificados.
+ */
+export function renderMarkdown(texto: string, { duros = false } = {}): string {
+  const crudo = marked.parse(texto ?? '', { async: false, breaks: duros }) as string;
+  return DOMPurify.sanitize(crudo, {
+    // Sin formularios, iframes ni multimedia: nada de eso aparece en una
+    // respuesta legítima y todo amplía la superficie sin dar nada a cambio.
+    FORBID_TAGS: ['form', 'input', 'button', 'iframe', 'object', 'embed', 'style', 'video', 'audio'],
+    FORBID_ATTR: ['style', 'onerror', 'onload'],
+  });
+}
