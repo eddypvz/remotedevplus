@@ -219,6 +219,8 @@ export const CLAUDE_WS = {
   DECIDE: 'decide',
   /** cliente → agente: cambiar modelo o modo en caliente */
   SET: 'set',
+  /** cliente → agente: quitar de la lista las tareas ya terminadas */
+  OLVIDAR_TAREAS: 'forget_tasks',
 };
 
 /** Estados de una conversación nativa. */

@@ -12,6 +12,7 @@ import type { ClaudeTask } from '@remotedevplus/protocol';
  * ese rato parece que no pasa nada.
  */
 const props = defineProps<{ tasks: ClaudeTask[] }>();
+const emit = defineEmits<{ (e: 'olvidar'): void }>();
 
 const corriendo = computed(() => props.tasks.filter((t) => t.estado === 'corriendo'));
 const terminadas = computed(() => props.tasks.filter((t) => t.estado !== 'corriendo'));
@@ -26,6 +27,12 @@ const icono = (estado: string) => ({
     <p class="cabeza">
       <Icon name="claude" :size="12" />
       {{ corriendo.length ? `${corriendo.length} en segundo plano` : `${terminadas.length} tarea${terminadas.length > 1 ? 's' : ''} terminada${terminadas.length > 1 ? 's' : ''}` }}
+      <!-- Se vencen solas a los cinco minutos, pero mirar un aviso ya leído
+           ese rato es mucho. Este es el gesto de "entendido". -->
+      <button
+        v-if="terminadas.length" class="x" title="Quitar las terminadas"
+        aria-label="Quitar las terminadas" @click="emit('olvidar')"
+      ><Icon name="close" :size="12" /></button>
     </p>
 
     <div v-for="t in [...corriendo, ...terminadas]" :key="t.id" class="fila" :class="t.estado">
@@ -38,6 +45,12 @@ const icono = (estado: string) => ({
 </template>
 
 <style scoped>
+.cabeza .x {
+  display: grid; place-items: center; margin-left: auto;
+  width: 20px; height: 20px; border-radius: 5px; color: var(--fg-faint);
+}
+.cabeza .x:hover { background: var(--bg-active); color: var(--fg); }
+
 .tareas {
   display: flex; flex-direction: column; gap: 3px;
   max-width: 54rem; padding: 9px 11px;

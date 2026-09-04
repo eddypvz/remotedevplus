@@ -28,7 +28,7 @@ export default async function claudeRoutes(app, { claude, guard, cfg }) {
   });
 
   app.get('/api/claude/history/:sessionId', R, async (req) => ({
-    messages: await claude.mensajes(req.user, req.params.sessionId),
+    ...(await claude.mensajes(req.user, req.params.sessionId)),
   }));
 
   app.patch('/api/claude/history/:sessionId', R, async (req) => (
@@ -66,6 +66,7 @@ export default async function claudeRoutes(app, { claude, guard, cfg }) {
         else if (msg.t === CLAUDE_WS.INTERRUPT) await claude.interrumpir(id, req.user);
         else if (msg.t === CLAUDE_WS.DECIDE) claude.decidir(id, msg.id, msg.decision || {}, req.user);
         else if (msg.t === CLAUDE_WS.SET) await claude.ajustar(id, msg.settings || {}, req.user);
+        else if (msg.t === CLAUDE_WS.OLVIDAR_TAREAS) claude.olvidarTareas(id);
       } catch (err) {
         if (socket.readyState === 1) {
           socket.send(JSON.stringify({ t: CLAUDE_WS.ERROR, message: err.message }));

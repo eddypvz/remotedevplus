@@ -269,6 +269,35 @@ Todas están razonadas en `docs/ARCHITECTURE.md`. Las que más cuesta reconstrui
   ningún error**. Pasa en cada despliegue: el build cambia el hash de los chunks
   y una pestaña abierta sigue pidiendo los viejos. Una ruta con extensión da
   404; solo las rutas sin extensión resuelven al index.
+- **Nada quitaba las tareas en segundo plano ya terminadas.** Se guardaban en un
+  `Map` por conversación y se reenviaban en cada reconexión, así que la barra
+  quedaba fija con avisos de hace horas hasta cerrar la pestaña. Ahora vencen a
+  los cinco minutos y hay un botón para descartarlas antes.
+- **`getSessionMessages` no sirve para una conversación larga.** Reconstruye el
+  hilo siguiendo la cadena de mensajes padre, y una **compactación la rompe**.
+  Medido en una sesión de 4613 líneas: devolvió **143 mensajes de 1667**, solo
+  70 de ellos presentes en ese archivo, cubriendo de la línea 102 a la 2240 y
+  deteniéndose **doce horas antes del final**. Lo que se mostraba era el
+  principio de la conversación, no lo último. Por eso `transcriptDeDisco` lee el
+  `.jsonl` y **gana el que traiga más mensajes**: en las sesiones cortas
+  coinciden, y el día que el SDK lo arregle vuelve a ganar él sin tocar nada.
+- **El mismo id de sesión puede estar en dos proyectos, y hay que elegir bien.**
+  Renombrar la carpeta de un proyecto deja una copia con el nombre viejo, y
+  `readdir` no promete orden —el viejo suele ordenar antes. Leer el primero que
+  aparezca mostraba una copia congelada: la conversación como estaba horas
+  antes. Gana el de `mtime` más reciente, que es el que se está escribiendo.
+- **El `cwd` de una sesión de Claude no es un valor único.** Se registra por
+  mensaje y cambia cuando un subagente trabaja en otro directorio; hay sesiones
+  con catorce rutas distintas. `listSessions` reporta solo una, así que **no
+  sirve para decidir a qué proyecto pertenece** una conversación: eso lo dice
+  dónde la guarda Claude Code, que es lo que selecciona `dir`. Se intentó
+  filtrar por ese `cwd` y escondía sesiones legítimas.
+- **Renombrar la carpeta del proyecto parte su historial de Claude.** Las
+  sesiones se guardan en `~/.claude/projects/<ruta-con-guiones>/`, así que el
+  nombre nuevo arranca vacío y las viejas siguen apuntando a la ruta anterior
+  por su campo `cwd`. Mover los `.jsonl` no alcanza: hay que corregir ese campo,
+  y **solo ese** —la ruta vieja dentro del contenido de los mensajes es parte de
+  lo que se dijo.
 - **npm 11 bloquea los install scripts.** Quedan aprobados en `allowScripts` del
   `package.json` raíz, que se commitea.
 
@@ -308,6 +337,81 @@ bitácora es un buzón de salida, no un archivo histórico.
 Formato: encabezado en una línea (imperativo, ≤72 caracteres), línea en blanco,
 y el cuerpo explicando el *porqué* antes que el *qué*.
 
-### Nada pendiente
+### Pendiente de commit — el chat mostraba el principio, no lo ultimo
 
-Todo lo anterior está commiteado. `git log` tiene la historia.
+```
+Leer el transcript del disco cuando el SDK se queda corto
+
+Abrir una conversacion larga mostraba su principio y nada reciente.
+`getSessionMessages` reconstruye el hilo siguiendo la cadena de mensajes padre,
+y una compactacion la rompe. Medido en una sesion de 4613 lineas: devolvio 143
+mensajes de 1667, solo 70 de ellos presentes en ese archivo, cubriendo de la
+linea 102 a la 2240 y deteniendose doce horas antes del final.
+
+`transcriptDeDisco` lee el .jsonl y filtra a los mensajes de la conversacion.
+Gana el que traiga mas: en las sesiones cortas los dos coinciden y no cambia
+nada, y el dia que el SDK lo arregle vuelve a ganar el sin tocar codigo.
+
+Es una dependencia del formato en disco, que es lo que este modulo evita en todo
+lo demas. Se acepta porque el riesgo es bajo: las lineas del archivo tienen la
+misma forma que los SessionMessage del SDK, asi que no hay traduccion que se
+pueda romper. Y el archivo se busca por nombre en todos los proyectos en vez de
+derivar la carpeta de la ruta: esa codificacion no esta documentada, y adivinarla
+es la clase de suposicion que falla en silencio.
+
+El archivo se busca por nombre en todos los proyectos, y cuando aparece en mas
+de uno gana el de mtime mas reciente. Eso ultimo no es un detalle: renombrar la
+carpeta de un proyecto deja una copia con el nombre viejo, `readdir` no promete
+orden y el viejo suele ordenar antes, asi que leer el primero mostraba una copia
+congelada —la conversacion como estaba horas antes, con el ultimo mensaje viejo.
+
+Cinco tests: el orden y el filtrado del ruido —el archivo trae snapshots,
+titulos generados y estado interno—, que una linea corrupta no corte la lectura,
+el desempate por mtime entre dos proyectos, y que sin archivo devuelva vacio.
+```
+
+### Pendiente de commit — tareas que se quedaban pegadas, y flechas visibles
+
+```
+Las tareas terminadas se olvidan, y las flechas del terminal se encuentran
+
+TAREAS EN SEGUNDO PLANO
+
+Nada las quitaba nunca. Se guardaban en un Map por conversacion y se reenviaban
+en cada reconexion, asi que la barra quedaba fija con avisos de tareas
+terminadas hace horas, hasta cerrar la pestaña.
+
+Ahora una tarea terminada vence a los cinco minutos —se conserva un rato porque
+el aviso de que termino es justamente lo que se quiere ver— y hay un boton para
+descartarlas antes, que es el gesto de "entendido".
+
+FLECHAS DEL TERMINAL
+
+Ya existian y ya funcionaban: se comprobo que `\x1b[A` recupera el comando
+anterior a traves del PTY. El problema era encontrarlas. Estaban en la posicion
+cuatro de trece, en una barra que scrollea, asi que en una tablet angosta
+quedaban fuera de la vista y parecia que no existian.
+
+Ahora `↑` y `↓` van al frente, junto a esc, y anchas como ella. Reutilizar el
+comando anterior es media terminal cuando no hay teclado.
+```
+
+### Pendiente de commit — el historial de Claude ya no rotula mal
+
+```
+Atribuir cada sesion de Claude a la carpeta por la que se pregunto
+
+El historial se veia "mezclado": conversaciones de este repositorio aparecian
+rotuladas con la ruta de otro. La causa no era el SDK, era la etiqueta.
+
+El `cwd` de una sesion NO es un valor unico: se registra por mensaje y cambia
+cuando un subagente trabaja en otro directorio. Hay sesiones con catorce rutas
+distintas. `listSessions` reporta solo una de ellas, y usarla para etiquetar da
+una carpeta cualquiera de las que la sesion toco.
+
+Lo que si identifica a que proyecto pertenece una conversacion es donde la
+guarda Claude Code, que es exactamente lo que selecciona `dir`. Asi que la
+sesion se atribuye a la carpeta por la que se pregunto, y el cwd muestreado
+queda como dato secundario.
+```
+

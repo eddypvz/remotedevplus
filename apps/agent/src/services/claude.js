@@ -1,4 +1,7 @@
 import { randomBytes } from 'node:crypto';
+import { readFile, readdir, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { query, listSessions, getSessionMessages, deleteSession, renameSession } from '@anthropic-ai/claude-agent-sdk';
 import { CLAUDE_WS, CLAUDE_MODELS, CLAUDE_MODES, hasPermission, ALL } from '@remotedevplus/protocol';
 import { plain } from '../db/index.js';
@@ -9,6 +12,15 @@ const MAX_CONVERSACIONES = 12;
 const BUFFER = 2000;
 /** Un permiso sin responder no puede bloquear el turno para siempre. */
 const PERMISO_TTL_MS = 10 * 60_000;
+/**
+ * Cuánto se conserva una tarea ya terminada.
+ *
+ * Se conserva un rato porque el aviso de que terminó es justamente lo que se
+ * quiere ver. Pero no para siempre: nada las quitaba del mapa, así que se
+ * reenviaban en cada reconexión y la barra quedaba fija con tareas de hace
+ * horas hasta cerrar la pestaña.
+ */
+const TAREA_TERMINADA_TTL_MS = 5 * 60_000;
 
 /**
  * Cliente nativo de Claude Code, sobre el Agent SDK.
@@ -21,6 +33,82 @@ const PERMISO_TTL_MS = 10 * 60_000;
  * El SDK autentica con el login que ya tiene el CLI de Claude Code, así que
  * consume la suscripción del usuario y no pide ANTHROPIC_API_KEY.
  */
+/**
+ * Lee el transcript de una sesión directamente de su archivo.
+ *
+ * Existe porque `getSessionMessages` no sirve para una conversación larga:
+ * reconstruye el hilo siguiendo la cadena de mensajes padre, y una
+ * **compactación la rompe**. Medido en una sesión de 4613 líneas: devolvió 143
+ * mensajes, de los cuales solo 70 estaban en ese archivo, cubriendo de la línea
+ * 102 a la 2240 y deteniéndose doce horas antes del final. Lo que se veía en
+ * pantalla era el principio de la conversación, no lo último.
+ *
+ * Es una dependencia del formato en disco, que es justo lo que este módulo
+ * evita en todo lo demás. Se acepta acá porque el riesgo es bajo: las líneas del
+ * `.jsonl` tienen la misma forma que los `SessionMessage` que devuelve el SDK
+ * —`type`, `uuid`, `message`—, así que no hay traducción que se pueda romper.
+ * Y se usa solo si da MÁS mensajes que el SDK: el día que el SDK lo arregle,
+ * gana el SDK sin tocar nada.
+ *
+ * El archivo se busca por nombre en todos los proyectos en vez de derivar la
+ * carpeta de la ruta: la codificación de esos nombres no está documentada, y
+ * adivinarla es la clase de suposición que después falla en silencio.
+ */
+export async function transcriptDeDisco(sessionId, raiz = join(homedir(), '.claude', 'projects')) {
+  let proyectos;
+  try {
+    proyectos = await readdir(raiz);
+  } catch {
+    return [];
+  }
+
+  /*
+   * El mismo id puede estar en más de un proyecto, y hay que elegir bien.
+   *
+   * Renombrar la carpeta de un proyecto deja una copia en el nombre viejo, y
+   * `readdir` no promete ningún orden —de hecho el nombre viejo suele ordenar
+   * antes. Devolver el primero que aparezca hacía leer una copia congelada y
+   * mostrar la conversación como estaba horas antes. Gana el modificado más
+   * recientemente, que es el que se está escribiendo.
+   */
+  const candidatos = [];
+  for (const proyecto of proyectos) {
+    const ruta = join(raiz, proyecto, `${sessionId}.jsonl`);
+    try {
+      const st = await stat(ruta);
+      if (st.isFile()) candidatos.push({ ruta, mtime: st.mtimeMs });
+    } catch { /* no está en este proyecto */ }
+  }
+  candidatos.sort((a, b) => b.mtime - a.mtime);
+
+  for (const { ruta } of candidatos) {
+    let crudo;
+    try {
+      crudo = await readFile(ruta, 'utf8');
+    } catch {
+      continue;
+    }
+    const salida = [];
+    for (const linea of crudo.split('\n')) {
+      if (!linea.trim()) continue;
+      let d;
+      try { d = JSON.parse(linea); } catch { continue; }
+      // Solo la conversación. El archivo trae además snapshots de archivos,
+      // títulos generados y estado interno que no son mensajes.
+      if (d.type !== 'user' && d.type !== 'assistant') continue;
+      salida.push({
+        type: d.type,
+        uuid: d.uuid,
+        session_id: d.sessionId ?? sessionId,
+        message: d.message,
+        parent_tool_use_id: d.parentToolUseId ?? null,
+      });
+    }
+    return salida;
+  }
+  return [];
+}
+
 export function createClaude(db, cfg, audit) {
   /** @type {Map<string, object>} */
   const conversaciones = new Map();
@@ -218,6 +306,14 @@ export function createClaude(db, cfg, audit) {
           });
           c.tareas.set(m.task_id, t);
           emitir(c, CLAUDE_WS.TASKS, { tasks: [...c.tareas.values()] });
+          // Terminada: se olvida sola. Sin esto la barra no se limpia nunca.
+          const reloj = setTimeout(() => {
+            if (c.tareas.get(m.task_id)?.estado !== 'corriendo') {
+              c.tareas.delete(m.task_id);
+              emitir(c, CLAUDE_WS.TASKS, { tasks: [...c.tareas.values()] });
+            }
+          }, TAREA_TERMINADA_TTL_MS);
+          reloj.unref?.();
         }
 
         // Lo único que el SDK reporta en vivo durante el turno.
@@ -473,9 +569,17 @@ export function createClaude(db, cfg, audit) {
       const propias = new Set(q.mias.all(user.id).map((r) => r.session_id));
       const esSuper = hasPermission(user.permissions, ALL);
 
-      // Una sesión pertenece a una carpeta, así que hay que preguntar por cada
-      // una del workspace y unir. Un mismo id no puede repetirse entre
-      // carpetas, pero se deduplica igual por si dos raíces se solapan.
+      /*
+       * La sesión se atribuye a la carpeta por la que se preguntó, no al `cwd`
+       * que reporta el SDK.
+       *
+       * El `cwd` de una sesión NO es un valor único: se registra por mensaje y
+       * cambia cuando un subagente trabaja en otro directorio. Hay sesiones con
+       * catorce rutas distintas. Lo que sí identifica a qué proyecto pertenece
+       * es dónde la guarda Claude Code, que es exactamente lo que `dir`
+       * selecciona. Usar el `cwd` muestreado para etiquetar hacía que una
+       * conversación de este repositorio apareciera rotulada con otra carpeta.
+       */
       const vistos = new Set();
       const salida = [];
       for (const cwd of carpetas) {
@@ -487,7 +591,9 @@ export function createClaude(db, cfg, audit) {
           salida.push({
             sessionId: s.sessionId,
             title: s.customTitle || s.summary || s.firstPrompt?.slice(0, 90) || 'Sin título',
-            cwd: s.cwd ?? cwd,
+            cwd,
+            // Uno de los directorios que tocó la sesión, para el detalle.
+            cwdVisto: s.cwd ?? null,
             updatedAt: new Date(s.lastModified ?? s.createdAt ?? Date.now()).getTime(),
             gitBranch: s.gitBranch,
             mine: propias.has(s.sessionId),
@@ -514,7 +620,39 @@ export function createClaude(db, cfg, audit) {
       if (duena && duena.user_id !== user.id && !hasPermission(user.permissions, ALL)) {
         throw httpError(404, 'No existe esa conversación');
       }
-      return getSessionMessages(sessionId, { limit: limite }).catch(() => []);
+      const [delSdk, delDisco] = await Promise.all([
+        getSessionMessages(sessionId, { limit: limite }).catch(() => []),
+        transcriptDeDisco(sessionId),
+      ]);
+
+      /*
+       * Gana el que traiga más.
+       *
+       * En una conversación corta los dos coinciden y da igual. En una larga el
+       * SDK se queda muy corto —ver `transcriptDeDisco`— y el disco es lo único
+       * que tiene la conversación completa. Comparar en vez de elegir a mano
+       * significa que el día que el SDK lo arregle, vuelve a ganar él solo.
+       */
+      const mensajes = delDisco.length > delSdk.length ? delDisco : delSdk;
+      return {
+        mensajes,
+        // Para que la interfaz pueda decir de dónde salió, y cuánto se recortó.
+        fuente: mensajes === delDisco ? 'disco' : 'sdk',
+        recortadoPorElSdk: Math.max(0, delDisco.length - delSdk.length),
+      };
+    },
+
+    /**
+     * Quita de la lista las tareas ya terminadas.
+     *
+     * El vencimiento automático las limpia solo, pero cinco minutos mirando un
+     * aviso que ya se leyó es mucho. Esto es el gesto de "entendido".
+     */
+    olvidarTareas(id) {
+      const c = conversaciones.get(id);
+      if (!c) return;
+      for (const [tid, t] of c.tareas) if (t.estado !== 'corriendo') c.tareas.delete(tid);
+      emitir(c, CLAUDE_WS.TASKS, { tasks: [...c.tareas.values()] });
     },
 
     async borrarHistorial(user, sessionId) {

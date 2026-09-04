@@ -27,12 +27,20 @@ function clearCtrl() {
 }
 defineExpose({ clearCtrl });
 
+/*
+ * `↑` y `↓` van al frente y anchas.
+ *
+ * Son las más usadas de todas —reutilizar el comando anterior es media terminal
+ * sin teclado— y estaban en la posición cuatro de trece, en una barra que
+ * scrollea: en una tablet angosta quedaban fuera de la vista, y parecía que no
+ * existían.
+ */
 const keys = [
   { label: 'esc', data: '\x1b', wide: true },
+  { label: '↑', data: '\x1b[A', wide: true },
+  { label: '↓', data: '\x1b[B', wide: true },
   { label: 'tab', data: '\t' },
   { label: '⇧tab', data: '\x1b[Z' },
-  { label: '↑', data: '\x1b[A' },
-  { label: '↓', data: '\x1b[B' },
   { label: '←', data: '\x1b[D' },
   { label: '→', data: '\x1b[C' },
   { label: '|', data: '|' },

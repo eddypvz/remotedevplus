@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, shallowRef, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue';
-import { CLAUDE_MODELS, CLAUDE_MODES } from '@remotedevplus/protocol';
+import { CLAUDE_MODELS, CLAUDE_MODES, CLAUDE_WS } from '@remotedevplus/protocol';
 import type { ClaudeHistoryEntry } from '@remotedevplus/protocol';
 import { api, q } from '../../api';
 import Icon from '../../ui/Icon.vue';
@@ -208,9 +208,9 @@ async function abrir(resume?: string) {
 }
 
 async function cargarDesdeDisco(sessionId: string) {
-  const r = await api.get<{ messages: any[] }>(`/api/claude/history/${sessionId}`)
-    .catch(() => ({ messages: [] }));
-  mensajes.value = r.messages;
+  const r = await api.get<{ mensajes: any[] }>(`/api/claude/history/${sessionId}`)
+    .catch(() => ({ mensajes: [] }));
+  mensajes.value = r.mensajes ?? [];
 }
 
 async function cargarHistorial() {
@@ -342,7 +342,10 @@ onBeforeUnmount(() => {
         <Markdown :source="enVivo" />
       </div>
 
-      <TareasBarra v-if="socket.tasks.value.length" :tasks="socket.tasks.value" />
+      <TareasBarra
+        v-if="socket.tasks.value.length" :tasks="socket.tasks.value"
+        @olvidar="socket.send({ t: CLAUDE_WS.OLVIDAR_TAREAS })"
+      />
 
       <div v-if="pensando && !enVivo" class="pensando"><span /><span /><span /></div>
     </div>

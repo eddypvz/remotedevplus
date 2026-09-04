@@ -30,6 +30,7 @@ export const CLAUDE_WS: {
   PERMISSION: 'permission';
   PERMISSION_DONE: 'permission_done'; SETTINGS: 'settings'; ERROR: 'error';
   SEND: 'send'; INTERRUPT: 'interrupt'; DECIDE: 'decide'; SET: 'set';
+  OLVIDAR_TAREAS: 'forget_tasks';
 };
 export type ClaudeState = 'inactiva' | 'pensando' | 'esperando-permiso' | 'terminada';
 export const CLAUDE_STATE: ClaudeState[];

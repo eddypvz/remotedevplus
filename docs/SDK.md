@@ -130,6 +130,43 @@ Dos cosas del inventario que verifiqué y **no** eran así acá:
 
 ## Cosas aprendidas que no están documentadas
 
+### `getSessionMessages` no sirve para una conversación larga
+
+Reconstruye el hilo siguiendo la cadena de mensajes padre, y una **compactación
+la rompe**. No devuelve la cola: devuelve el tramo donde la cadena se corta.
+
+Medido en una sesión de 4613 líneas:
+
+| | |
+|---|---|
+| mensajes que devolvió | 143 |
+| mensajes reales en el archivo | 1667 |
+| de los 143, presentes en ese archivo | 70 |
+| rango cubierto | línea 102 a 2240 de 4613 |
+| última marca de tiempo entregada | 01:46, doce horas antes del final |
+
+Ni `limit` ni `offset` cambian nada: con `limit: 400` devuelve los mismos 143.
+En sesiones que nunca se compactaron devuelve exactamente lo que hay.
+
+Por eso `services/claude.js` lee el `.jsonl` con `transcriptDeDisco` y **usa el
+que traiga más mensajes**. Es una dependencia del formato en disco, aceptada
+porque las líneas del archivo tienen la misma forma que los `SessionMessage` del
+SDK: no hay traducción que se pueda romper.
+
+El archivo se busca por nombre en **todos** los proyectos, sin derivar la carpeta
+de la ruta —esa codificación no está documentada—, y cuando el id aparece en más
+de uno **gana el de `mtime` más reciente**. Renombrar la carpeta de un proyecto
+deja una copia con el nombre viejo, y `readdir` no promete orden: leer el primero
+que aparezca muestra una copia congelada.
+
+### El `cwd` de una sesión cambia por mensaje
+
+No es un valor único: se registra en cada mensaje y cambia cuando un subagente
+trabaja en otro directorio. Se vio una sesión con **catorce rutas distintas**.
+`listSessions` reporta solo una, así que **no sirve para decidir a qué proyecto
+pertenece** una conversación — eso lo dice dónde la guarda Claude Code, que es
+lo que selecciona `dir`.
+
 - **`AskUserQuestion` no se contesta permitiéndola.** Las respuestas vuelven
   dentro de su propio input, en `answers`, por el `updatedInput` de
   `canUseTool`. Permitirla a secas la ejecuta sin nadie que conteste.
