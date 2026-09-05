@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import logo from '../images/remotedevplus.png';
 import { computed, ref } from 'vue';
 import Icon from '../ui/Icon.vue';
 import { getPanel } from '../modules';
@@ -32,6 +33,12 @@ function startDrag(e: PointerEvent) {
     :style="{ width: layout.sidebarOverlays ? undefined : layout.sidebarWidth + 'px' }"
   >
     <header class="head">
+      <!--
+        La marca va acá y no en el rail: el rail mide 46px y el logo es un
+        wordmark horizontal, ahí no entra. Chica y algo apagada, porque
+        compite por el ancho con el nombre del panel.
+      -->
+      <img :src="logo" alt="RemoteDev+" class="marca">
       <span class="label">{{ panel?.label ?? '' }}</span>
       <button class="hide" title="Ocultar el panel" aria-label="Ocultar el panel" @click="layout.toggleSidebar()">
         <Icon name="panel" :size="17" />
@@ -71,10 +78,15 @@ function startDrag(e: PointerEvent) {
   box-shadow: 0 0 0 1px var(--border), 12px 0 32px var(--shadow);
 }
 
+.marca {
+  height: 13px; width: auto; flex: 0 0 auto;
+  opacity: .75; margin-right: 2px;
+}
+
 .head {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; gap: 8px;
   height: var(--tab-h); flex: 0 0 var(--tab-h);
-  padding: 0 4px 0 12px;
+  padding: 0 4px 0 10px;
   border-bottom: 1px solid var(--border);
 }
 .label {
@@ -82,7 +94,7 @@ function startDrag(e: PointerEvent) {
   text-transform: uppercase; color: var(--fg-faint);
 }
 .hide {
-  display: grid; place-items: center;
+  display: grid; place-items: center; margin-left: auto;
   width: var(--touch); height: var(--touch);
   color: var(--fg-faint); border-radius: 6px;
 }

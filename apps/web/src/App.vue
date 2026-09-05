@@ -15,6 +15,7 @@ import { useWorkspaces } from './stores/workspaces';
 import { useFiles } from './stores/files';
 import { useLauncher } from './stores/launcher';
 import { useEventos } from './stores/eventos';
+import { empezarALatir } from './stores/pestanaNavegador';
 
 const session = useSession();
 const layout = useLayout();
@@ -44,14 +45,31 @@ const showPicker = computed(() => mustPick.value || workspaces.pickerOpen);
  */
 const modalOpen = computed(() => showPicker.value || launcher.asking !== null);
 
+/*
+ * El latido dice a las demás pestañas del navegador qué proyecto tiene abierto
+ * esta. Sin eso, una pestaña nueva adoptaría el mismo workspace que la anterior
+ * y volveríamos al problema de no poder trabajar en dos a la vez.
+ */
+let dejarDeLatir: (() => void) | undefined;
+
 onMounted(async () => {
   // Arrancó bien: se olvida la marca de recarga por chunk perdido, para que la
   // red de seguridad siga disponible en el próximo despliegue.
   try { sessionStorage.removeItem('rdp.recarga-por-chunk'); } catch { /* modo privado */ }
-  layout.restore();
-  tabs.restore();
+  dejarDeLatir = empezarALatir(() => workspaces.activeId);
   await session.bootstrap();
   window.addEventListener('resize', layout.onResize);
+});
+
+/*
+ * Las pestañas y el layout se cargan del conjunto del workspace activo, y se
+ * recargan al cambiarlo. `immediate` no: hay que esperar a que la lista de
+ * workspaces esté leída, porque hasta entonces el activo puede ser uno que ya
+ * no existe.
+ */
+watch(() => workspaces.activeId, (ws) => {
+  layout.restore(ws);
+  tabs.restore(ws);
 });
 
 // El panel del sidebar sigue a la pestaña activa cuando pertenece a un módulo.
@@ -67,7 +85,11 @@ watch(() => session.authenticated, async (yes) => {
   // y el store entraría en un bucle de reintentos.
   eventos.connect();
   await workspaces.load();
-  if (workspaces.activeId !== null) files.openInitial();
+  if (workspaces.activeId !== null) {
+    layout.restore(workspaces.activeId);
+    tabs.restore(workspaces.activeId);
+    files.openInitial();
+  }
 }, { immediate: true });
 
 /*
@@ -83,6 +105,7 @@ function alDespertar() {
 document.addEventListener('visibilitychange', alDespertar);
 
 onBeforeUnmount(() => {
+  dejarDeLatir?.();
   window.removeEventListener('resize', layout.onResize);
   document.removeEventListener('visibilitychange', alDespertar);
   eventos.dispose();

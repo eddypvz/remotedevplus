@@ -140,7 +140,18 @@ export async function buildServer(cfg = loadConfig(), services = createServices(
   // vhost: `node apps/agent/src/cli.js serve` ya es la app completa.
   const hasBuild = existsSync(join(cfg.webRoot, 'index.html'));
   if (hasBuild) {
-    await app.register(fastifyStatic, { root: cfg.webRoot, prefix: cfg.basePath, wildcard: false });
+    /*
+     * `wildcard` en su valor por defecto, no en `false`.
+     *
+     * Con `wildcard: false` el plugin recorre el directorio **al arrancar** y
+     * registra una ruta por archivo. Cualquier archivo que aparezca después no
+     * existe para él — y el build cambia el hash de cada chunk, así que tras
+     * compilar TODOS son nuevos: la aplicación quedaba en blanco hasta reiniciar
+     * el servicio, con 404 en cada chunk. Costó encontrarlo porque el index.html
+     * sí se actualizaba: su ruta ya estaba registrada y el contenido se lee del
+     * disco en cada petición, así que parecía que compilar alcanzaba.
+     */
+    await app.register(fastifyStatic, { root: cfg.webRoot, prefix: cfg.basePath });
   }
 
   app.setNotFoundHandler((req, reply) => {

@@ -21,7 +21,30 @@ const dialogo = useDialogo();
 const tabs = useTabs();
 const emit = defineEmits<{ (e: 'ver', ruta: string, preparado: boolean): void }>();
 
-const mensaje = ref('');
+/*
+ * Título y cuerpo separados, como los espera git.
+ *
+ * Un commit es un asunto de una línea, una línea en blanco, y después el
+ * detalle: de eso dependen `git log --oneline`, los listados de GitHub y el
+ * propio árbol de este módulo. Con un solo campo era demasiado fácil escribir
+ * un párrafo entero como asunto, que después se lee cortado en todas partes.
+ *
+ * El cuerpo es opcional a propósito: la mayoría de los commits no lo necesitan,
+ * y obligar a llenarlo produciría cuerpos que repiten el título.
+ */
+const titulo = ref('');
+const cuerpo = ref('');
+
+/** Lo que recibe git: asunto, línea en blanco, detalle. */
+const mensajeCompleto = computed(() => {
+  const t = titulo.value.trim();
+  const c = cuerpo.value.trim();
+  return c ? `${t}\n\n${c}` : t;
+});
+
+/** Se recomienda 72 para que no se corte en los listados; no se impide. */
+const LARGO_SUGERIDO = 72;
+const tituloLargo = computed(() => titulo.value.trim().length > LARGO_SUGERIDO);
 /** Rutas marcadas, para actuar sobre varias a la vez. */
 const marcadas = ref(new Set<string>());
 const enmendar = ref(false);
@@ -30,7 +53,7 @@ const error = ref('');
 
 const e = computed(() => git.estado);
 const puedeHacerCommit = computed(() => (
-  mensaje.value.trim().length > 0 && ((e.value?.preparados.length ?? 0) > 0 || enmendar.value)
+  titulo.value.trim().length > 0 && ((e.value?.preparados.length ?? 0) > 0 || enmendar.value)
 ));
 
 /**
@@ -89,8 +112,9 @@ const rutas = (lista: GitArchivo[]) => lista.map((a) => a.ruta);
 async function hacerCommit() {
   if (!puedeHacerCommit.value) return;
   await con(async () => {
-    await git.commit(mensaje.value, enmendar.value);
-    mensaje.value = '';
+    await git.commit(mensajeCompleto.value, enmendar.value);
+    titulo.value = '';
+    cuerpo.value = '';
     enmendar.value = false;
     await git.cargar(git.cwd!, true);
   });
@@ -313,9 +337,23 @@ async function descartar(lista: GitArchivo[]) {
 
     <!-- La caja de commit, siempre al pie -->
     <div class="commit">
+      <input
+        v-model="titulo" class="asunto" :class="{ largo: tituloLargo }"
+        placeholder="Título del commit"
+        spellcheck="false" autocapitalize="sentences"
+        @keydown.enter.prevent="hacerCommit"
+      >
+      <!--
+        El contador aparece solo al pasarse: un número siempre visible invita a
+        contar caracteres en vez de escribir. 72 es la convención para que el
+        asunto no se corte en `git log --oneline` ni en GitHub.
+      -->
+      <p v-if="tituloLargo" class="aviso">
+        {{ titulo.trim().length }} caracteres; sobre 72 se corta en los listados.
+      </p>
       <textarea
-        v-model="mensaje" rows="2" class="mensaje"
-        placeholder="Mensaje del commit…"
+        v-model="cuerpo" rows="2" class="mensaje"
+        placeholder="Detalle (opcional)"
         @keydown.enter.meta.prevent="hacerCommit"
         @keydown.enter.ctrl.prevent="hacerCommit"
       />
@@ -341,7 +379,7 @@ async function descartar(lista: GitArchivo[]) {
   display: flex; align-items: center; gap: 7px;
   padding: 7px 12px 5px; background: var(--bg-panel);
 }
-.titulo {
+.cubeta header .titulo {
   font-size: 10.5px; font-weight: 600; letter-spacing: .06em;
   text-transform: uppercase; color: var(--fg-faint);
 }
@@ -457,6 +495,21 @@ async function descartar(lista: GitArchivo[]) {
   border-top: 1px solid var(--border); background: var(--bg-panel);
   position: sticky; bottom: 0;
 }
+/*
+  Se llama `asunto` y no `titulo` a propósito: `.titulo` ya era el rótulo de
+  las cubetas, y la regla de más abajo en la hoja le ganaba a la de arriba, así
+  que «STAGED» aparecía dentro de una caja de texto.
+*/
+.asunto {
+  width: 100%; height: 34px; padding: 0 10px; margin-bottom: 5px;
+  background: var(--bg); border: 1px solid var(--border-strong);
+  border-radius: 8px; font-size: 13px; color: var(--fg);
+}
+.asunto:focus { outline: none; border-color: var(--accent); }
+/* Se avisa, no se impide: hay commits que legítimamente necesitan más. */
+.asunto.largo { border-color: var(--warn); }
+.aviso { margin: -2px 0 5px; font-size: 11px; color: var(--warn); }
+
 .mensaje {
   width: 100%; min-height: 52px; max-height: 30dvh; padding: 9px 11px; resize: vertical;
   background: var(--bg); border: 1px solid var(--border-strong); border-radius: 9px;

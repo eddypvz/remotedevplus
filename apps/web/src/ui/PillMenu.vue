@@ -32,6 +32,29 @@ const emit = defineEmits<{ (e: 'update:modelValue', v: string): void }>();
 const abierto = ref(false);
 const raiz = ref<HTMLElement>();
 
+/**
+ * Hacia dónde se abre el menú.
+ *
+ * Nació abriendo siempre hacia arriba, porque el primer uso fue el compositor
+ * de Claude, que vive al pie de la pantalla. Puesto en una barra de arriba —la
+ * de git— el menú se salía por el borde superior y no se veía. Se decide al
+ * abrir, midiendo qué lado tiene más aire.
+ */
+const hacia = ref<'arriba' | 'abajo'>('arriba');
+
+function alternar() {
+  if (abierto.value) { abierto.value = false; return; }
+  const caja = raiz.value?.getBoundingClientRect();
+  if (caja) {
+    const arriba = caja.top;
+    const abajo = window.innerHeight - caja.bottom;
+    // Empate al de arriba solo si de verdad alcanza: si no, gana el que tenga
+    // más, aunque tampoco sea mucho.
+    hacia.value = arriba >= 240 || arriba >= abajo ? 'arriba' : 'abajo';
+  }
+  abierto.value = true;
+}
+
 const actual = computed(() => props.options.find((o) => o.id === props.modelValue));
 const texto = computed(() => (
   props.modelValue === 'default' && props.fallbackLabel
@@ -69,14 +92,14 @@ onBeforeUnmount(() => {
       :aria-label="`${props.label}: ${texto}`"
       :aria-expanded="abierto"
       :title="`${props.label} — ${actual?.hint ?? texto}`"
-      @click="abierto = !abierto"
+      @click="alternar"
     >
       <Icon v-if="props.icon" :name="props.icon" :size="13" />
       <span>{{ texto }}</span>
       <Icon name="chevron" :size="11" class="caret" />
     </button>
 
-    <div v-if="abierto" class="menu" role="listbox" :aria-label="props.label">
+    <div v-if="abierto" class="menu" :class="hacia" role="listbox" :aria-label="props.label">
       <p class="cabeza">{{ props.label }}</p>
       <button
         v-for="o in props.options" :key="o.id"
@@ -111,13 +134,16 @@ onBeforeUnmount(() => {
 .caret { transform: rotate(90deg); opacity: .5; }
 
 .menu {
-  position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 20;
+  position: absolute; left: 0; z-index: 20;
   display: flex; flex-direction: column; gap: 1px;
   width: max-content; min-width: 13rem; max-width: min(22rem, 82vw);
   max-height: 60dvh; overflow: auto; padding: 5px;
   background: var(--bg-panel); border: 1px solid var(--border-strong);
   border-radius: 11px; box-shadow: 0 14px 36px var(--shadow);
 }
+.menu.arriba { bottom: calc(100% + 6px); }
+.menu.abajo { top: calc(100% + 6px); }
+
 .cabeza {
   margin: 2px 0 4px; padding: 0 8px;
   font-size: 10.5px; font-weight: 600; letter-spacing: .06em;

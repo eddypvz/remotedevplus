@@ -9,6 +9,7 @@ import PanelStash from './PanelStash.vue';
 import DiffVista from './DiffVista.vue';
 import DetalleCommit from './DetalleCommit.vue';
 import ClonarModal from './ClonarModal.vue';
+import PillMenu from '../../ui/PillMenu.vue';
 import { api, q } from '../../api';
 import { useGit } from '../../stores/git';
 import { useDialogo } from '../../stores/dialogo';
@@ -31,6 +32,30 @@ const files = useFiles();
 const eventos = useEventos();
 
 const carpeta = computed(() => (props.ctx.cwd as string) || files.defaultCwd);
+
+/**
+ * Con un workspace de varias carpetas hace falta cambiar de repositorio sin
+ * cerrar la pestaña.
+ *
+ * Antes la carpeta se fijaba al abrir y no había vuelta atrás: un workspace con
+ * backend y frontend obligaba a abrir git dos veces y quedarse con dos pestañas.
+ * Se escribe en `ctx` para que sobreviva a una recarga, igual que la carpeta con
+ * la que se abrió.
+ */
+const opcionesCarpeta = computed(() => files.folders.map((f) => ({
+  id: f.path,
+  label: f.name,
+  // La ruta como pista: dos carpetas de proyectos distintos pueden llamarse
+  // igual —`app`, `src`— y el nombre solo no alcanza para distinguirlas.
+  hint: f.path,
+})));
+
+function cambiarCarpeta(ruta: string) {
+  const f = files.folders.find((x) => x.path === ruta);
+  if (!f) return;
+  props.ctx.cwd = f.path;
+  props.ctx.label = f.name;
+}
 const seleccionado = ref<string | null>(null);
 const lado = ref<'cambios' | 'stash'>('cambios');
 /** En angosto no caben árbol y panel a la vez. */
@@ -204,6 +229,19 @@ onBeforeUnmount(() => {
         ↓{{ git.estado.atras }}
       </span>
       <span v-if="git.estado?.upstream" class="up">{{ git.estado.upstream }}</span>
+
+      <!--
+        `PillMenu` y no un `<select>` nativo: el proyecto ya lo reemplazó una vez
+        porque en WebKit el desplegable no llega a abrirse dentro de una barra
+        como esta. Solo con más de una carpeta; con una sola sería un menú de un
+        solo elemento.
+      -->
+      <PillMenu
+        v-if="opcionesCarpeta.length > 1"
+        :model-value="carpeta" :options="opcionesCarpeta"
+        icon="folder" label="Repositorio del workspace"
+        @update:model-value="cambiarCarpeta"
+      />
 
       <span class="hueco" />
 

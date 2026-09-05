@@ -38,16 +38,21 @@ function decir(texto: string, malo = false) {
 }
 
 /**
- * Copia la ruta relativa a su carpeta del workspace.
+ * Las tres formas de referirse a un archivo, porque las tres se usan.
  *
- * Relativa y no absoluta porque el uso es pegársela a Claude, que entiende
- * `@ruta/relativa` desde su directorio de trabajo. La absoluta queda en el
- * tooltip de la fila.
+ * - **nombre**: para renombrar, buscar o mencionarlo en una conversación.
+ * - **relativa**: para pegársela a Claude, que entiende `@ruta/relativa` desde
+ *   su directorio de trabajo. Es la que más se usa, por eso quedó primero.
+ * - **completa**: para un comando en el terminal, un `.env` o un vhost, donde
+ *   una ruta relativa no sirve de nada.
  */
-async function copiarRuta(row: TreeRow) {
-  const carpeta = files.folders.find((f) => row.entry.path.startsWith(f.path + '/'));
-  const texto = carpeta ? row.entry.path.slice(carpeta.path.length + 1) : row.entry.path;
-  decir(await copiar(texto) ? texto : 'No se pudo copiar', false);
+function rutaRelativa(path: string) {
+  const carpeta = files.folders.find((f) => path.startsWith(f.path + '/'));
+  return carpeta ? path.slice(carpeta.path.length + 1) : path;
+}
+
+async function copiarTexto(texto: string, que: string) {
+  decir(await copiar(texto) ? `${que}: ${texto}` : 'No se pudo copiar', false);
 }
 
 function openTerminalHere(row: TreeRow) {
@@ -95,7 +100,9 @@ const opciones = computed<OpcionMenu[]>(() => {
       icono: 'plus',
       deshabilitado: !w || !pp,
     },
-    { id: 'copiarRuta', etiqueta: 'Copiar la ruta', icono: 'panel' },
+    { id: 'copiarNombre', etiqueta: 'Copiar el nombre', icono: 'panel' },
+    { id: 'copiarRuta', etiqueta: 'Copiar la ruta relativa', icono: 'panel' },
+    { id: 'copiarRutaCompleta', etiqueta: 'Copiar la ruta completa', icono: 'panel' },
     // Solo archivos: una carpeta habría que comprimirla, y el agente no lo hace.
     { id: 'descargar', etiqueta: 'Descargar', icono: 'abajo', deshabilitado: esDir },
     { id: 'sep3', separador: true },
@@ -181,8 +188,14 @@ async function ejecutar(id: string, row: TreeRow) {
       return decir(`${hechos.length} elemento${hechos.length === 1 ? '' : 's'} en ${nombreCorto(dir)}`);
     }
 
+    case 'copiarNombre':
+      return copiarTexto(row.entry.name, 'Nombre');
+
     case 'copiarRuta':
-      return copiarRuta(row);
+      return copiarTexto(rutaRelativa(row.entry.path), 'Ruta');
+
+    case 'copiarRutaCompleta':
+      return copiarTexto(row.entry.path, 'Ruta completa');
 
     case 'descargar':
       return descargar(row.entry.path);

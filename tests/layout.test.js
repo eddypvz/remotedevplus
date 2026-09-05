@@ -1,5 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { workspaceAlArrancar } from '../apps/web/src/stores/pestanaNavegador.ts';
 
 /**
  * El panel del sidebar sigue a la pestaña activa.
@@ -196,5 +197,38 @@ describe('el foco al cerrar una pestaña', () => {
   test('elige la hermana más cercana, no la primera', () => {
     const lista = [t('f1', 'file'), t('g1', 'git'), t('f2', 'file'), t('f3', 'file')];
     assert.equal(trasCerrar(lista, 3), 'f2');
+  });
+});
+
+describe('un proyecto por pestaña del navegador', () => {
+  /**
+   * Dos pestañas del mismo navegador comparten `localStorage`, así que elegir
+   * workspace en una lo cambiaba en la otra y trabajar en dos proyectos a la vez
+   * era imposible. La regla: lo que esta pestaña ya tenía manda siempre; lo
+   * último elegido en cualquier pestaña solo se adopta si nadie más lo usa.
+   */
+  const libre = () => false;
+  const tomado = () => true;
+
+  test('una recarga vuelve al proyecto de esta pestaña, tomado o no', () => {
+    // `propio` gana incluso si otra pestaña también lo tiene: es una recarga,
+    // no una pestaña nueva, y sacarle su proyecto sería peor.
+    assert.equal(workspaceAlArrancar(7, 3, libre), 7);
+    assert.equal(workspaceAlArrancar(7, 3, tomado), 7);
+  });
+
+  test('una pestaña nueva adopta el último si está libre', () => {
+    // Es lo que hace que reabrir el navegador caiga donde estabas.
+    assert.equal(workspaceAlArrancar(null, 3, libre), 3);
+  });
+
+  test('una pestaña nueva pregunta si el último ya está abierto', () => {
+    // El caso que motivó todo: abrir una segunda pestaña ofrece elegir otro
+    // proyecto en vez de duplicar el primero.
+    assert.equal(workspaceAlArrancar(null, 3, tomado), null);
+  });
+
+  test('sin nada guardado, pregunta', () => {
+    assert.equal(workspaceAlArrancar(null, null, libre), null);
   });
 });

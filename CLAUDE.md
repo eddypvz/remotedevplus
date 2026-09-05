@@ -43,7 +43,9 @@ node apps/agent/src/cli.js serve                        # lee remotedevplus.conf
 | `npm run user -- …` | `list`, `add`, `passwd`, `perms`, `roots`, `disable`, `rm` |
 
 **El agente sirve el SPA él mismo**: no hay Apache, nginx ni vhost. Después de
-tocar `apps/web/` hay que `npm run build` o el navegador sigue viendo lo viejo.
+tocar `apps/web/` hay que `npm run build` o el navegador sigue viendo lo viejo;
+no hace falta reiniciar el agente, que lee los archivos del disco en cada
+petición.
 
 ### Como servicio, que es como se usa de verdad
 
@@ -209,6 +211,11 @@ Todas están razonadas en `docs/ARCHITECTURE.md`. Las que más cuesta reconstrui
   lee `$1rem` como el grupo *llamado* `1rem`, que no existe, y lo reemplaza por
   nada. Hay que escribir `${1}rem`. No se puede arreglar del lado nuestro sin
   adivinar la intención, así que la interfaz lo dice en el campo.
+- **Dos reglas CSS con el mismo nombre de clase en un `.vue` no chocan: gana la
+  de abajo.** El estilo está scopeado al componente, no dentro de él, así que
+  `.titulo` del rótulo de una cubeta y `.titulo` del campo de commit son la
+  misma clase. El rótulo «STAGED» apareció dentro de una caja de texto. Al
+  agregar una clase, buscarla antes en la hoja del propio archivo.
 - **`vh` no sirve en iPad**: mide el viewport grande. Siempre `dvh`.
 - **`flex: 0 0 auto` no scrollea, empuja.** Un panel que debe ceder necesita
   `flex: 0 1 auto` **y** un `min-height` propio, o se aplasta a una rendija.
@@ -323,6 +330,32 @@ Todas están razonadas en `docs/ARCHITECTURE.md`. Las que más cuesta reconstrui
   subirlo sin más crea un PNG de 300 bytes con cara de archivo. Se detecta por
   esa firma y se dice que hay que arrastrar. Con capturas de pantalla y con lo
   copiado desde otras aplicaciones sí llegan los bytes.
+- **`localStorage` se comparte entre pestañas del mismo navegador.** Por eso el
+  workspace activo vive en `sessionStorage` —que sí es por pestaña— y en
+  `localStorage` solo queda el último elegido, para que reabrir caiga donde
+  estabas. Una pestaña nueva lo adopta **solo si ninguna otra viva lo tiene
+  abierto**; eso se sabe con un latido en `localStorage`
+  (`stores/pestanaNavegador.ts`). Y las pestañas del editor y el layout se
+  guardan **por workspace**, o dos proyectos se pisan los archivos abiertos.
+- **`beforeunload` no siempre corre en iOS Safari.** Para saber que una pestaña
+  se cerró hay que escuchar `pagehide`.
+- **`@fastify/static` con `wildcard: false` no ve los archivos nuevos.** Recorre
+  el directorio **al arrancar** y registra una ruta por archivo; lo que aparezca
+  después no existe para él. Como el build cambia el hash de cada chunk, tras
+  compilar **todos** son nuevos y la aplicación queda en blanco con 404 en cada
+  uno hasta reiniciar el servicio. Engaña porque el `index.html` sí se
+  actualiza: su ruta ya estaba registrada y el contenido se lee del disco en
+  cada petición. Va sin `wildcard`, en su valor por defecto.
+- **Nada de `<select>` nativos.** En WebKit el desplegable no llega a abrirse
+  dentro de una barra como la de git, y encima un select solo muestra la
+  etiqueta: no deja icono ni descripción por opción. Para eso está
+  `ui/PillMenu.vue`, que ya reemplazó al primero. Se volvió a caer en esto una
+  vez; si aparece un `<select>` nuevo, cambiarlo.
+- **`PillMenu` abría siempre hacia arriba**, porque nació en el compositor de
+  Claude, que vive al pie de la pantalla. Puesto en una barra de arriba se salía
+  por el borde y no se veía. Ahora mide el aire de cada lado al abrir. Vale como
+  recordatorio general: un componente pensado para una posición no se mueve a
+  otra sin revisar de qué lado se despliega.
 - **npm 11 bloquea los install scripts.** Quedan aprobados en `allowScripts` del
   `package.json` raíz, que se commitea.
 
@@ -342,6 +375,10 @@ Los dos que más se notan:
 - **Las conversaciones de todos los devs van al mismo `~/.claude/projects`** con
   un agente compartido. La separación que hace `claude_sessions` es lógica, no
   del sistema de archivos.
+- **Dos pestañas del navegador en el MISMO workspace siguen compartiendo sus
+  archivos abiertos**: la clave de `localStorage` es por workspace, no por
+  pestaña. El selector avisa cuál ya está abierto en otra, que es lo que evita
+  llegar ahí sin querer.
 
 
 ## Bitácora de commits
@@ -361,6 +398,121 @@ bitácora es un buzón de salida, no un archivo histórico.
 
 Formato: encabezado en una línea (imperativo, ≤72 caracteres), línea en blanco,
 y el cuerpo explicando el *porqué* antes que el *qué*.
+
+### Pendiente de commit — marca, y cambiar de repositorio sin cerrar la pestaña
+
+```
+Poner la marca, y arreglar que los chunks nuevos no se sirvieran
+
+EL DEFECTO, QUE APARECIO SOLO
+
+Al agregar el favicon dio 404, y resulto no ser del favicon: el chunk principal
+del build tambien daba 404. `@fastify/static` estaba registrado con
+`wildcard: false`, que recorre el directorio AL ARRANCAR y registra una ruta por
+archivo. Lo que aparece despues no existe para el.
+
+Como cada build cambia el hash de todos los chunks, despues de compilar ninguno
+se servia y la aplicacion quedaba en blanco hasta reiniciar el servicio. Enganaba
+mucho porque el index.html si se actualizaba —su ruta ya estaba registrada y el
+contenido se lee del disco en cada peticion—, asi que parecia que compilar
+alcanzaba. Es tambien la causa real de las pantallas en blanco tras desplegar,
+que antes se habian atribuido solo al fallback de SPA.
+
+Va sin `wildcard`, en su valor por defecto. Comprobado en una instancia aparte:
+un archivo creado despues de arrancar se sirve, una ruta profunda de la SPA
+sigue devolviendo el index, y un archivo inexistente sigue dando 404.
+
+LOGO Y FAVICON
+
+El favicon va tambien como `apple-touch-icon`: es el que usa iPad al guardar la
+pagina en la pantalla de inicio, y sin el pone una captura que a ese tamano no
+se distingue de nada. Vite les pone hash al compilar, asi que se cachean como
+cualquier recurso.
+
+El logo es un wordmark horizontal, asi que en el login reemplaza al cuadrito y
+al titulo juntos. Alto fijo y ancho automatico: fijar el ancho lo deformaria en
+cuanto se cambie por otra imagen de distinta proporcion.
+
+EL NOMBRE VISIBLE ES RemoteDev+
+
+En el `<title>`, que es lo que se lee en la pestaña del navegador, y en el `alt`
+del logo. El paquete y el repositorio siguen siendo `remotedevplus`: cambiar eso
+seria renombrar todo otra vez sin ganar nada.
+
+CAMBIAR DE REPOSITORIO SIN CERRAR LA PESTANA
+
+La carpeta de git se fijaba al abrir y no habia vuelta atras, asi que un
+workspace con backend y frontend obligaba a abrir git dos veces. Ahora la barra
+lleva un selector con las carpetas del workspace —solo si hay mas de una— y la
+eleccion se escribe en el contexto de la pestana, asi que sobrevive a una
+recarga. Cada opcion muestra la ruta como pista: dos proyectos pueden tener
+carpetas llamadas igual y el nombre solo no alcanza.
+
+Se hizo con `PillMenu`, no con un `<select>` nativo. El primer intento uso uno y
+no se podia cambiar: en WebKit el desplegable no llega a abrirse dentro de una
+barra asi, que es exactamente por lo que `PillMenu` existe. Era el unico select
+nativo que quedaba en el proyecto.
+
+Y `PillMenu` tuvo que aprender a abrir hacia abajo. Abria siempre hacia arriba
+porque nacio en el compositor de Claude, que esta al pie de la pantalla; en una
+barra de arriba el menu se salia por el borde superior. Ahora mide el aire de
+cada lado al abrirse, asi que el compositor sigue abriendo hacia arriba y la
+barra de git hacia abajo, sin configurarlo.
+
+TITULO Y CUERPO DEL COMMIT SEPARADOS
+
+Un commit es un asunto de una linea, una linea en blanco y despues el detalle:
+de eso dependen `git log --oneline`, los listados de GitHub y el arbol de este
+mismo modulo. Con un solo campo era demasiado facil escribir un parrafo entero
+como asunto y verlo cortado en todas partes.
+
+El cuerpo es opcional a proposito: la mayoria de los commits no lo necesitan, y
+obligar a llenarlo produce cuerpos que repiten el titulo. El aviso de los 72
+caracteres aparece solo al pasarse —un contador siempre visible invita a contar
+en vez de escribir— y avisa sin impedir, porque hay asuntos que legitimamente
+necesitan mas.
+
+COPIAR NOMBRE, RUTA Y RUTA COMPLETA
+
+Habia una sola opcion y copiaba la ruta relativa al workspace, que para un
+archivo en la raiz es igual al nombre —de ahi la confusion. Ahora son tres,
+porque las tres se usan: el nombre para mencionarlo, la relativa para pegarsela
+a Claude, y la completa para un comando, un .env o un vhost.
+```
+
+### Pendiente de commit — un proyecto por pestaña del navegador
+
+```
+Aislar el proyecto activo por pestaña del navegador
+
+Abrir dos pestañas del navegador daba la misma sesion: elegir proyecto en una lo
+cambiaba en la otra, asi que trabajar en dos proyectos a la vez era imposible.
+La causa es que `localStorage` se comparte entre pestañas del mismo navegador, y
+ahi vivian tanto el workspace activo como el conjunto de archivos abiertos.
+
+El workspace activo pasa a `sessionStorage`, que si es por pestaña. En
+`localStorage` queda solo el ultimo elegido, para que reabrir el navegador caiga
+donde estabas — pero una pestaña nueva lo adopta SOLO si ninguna otra viva lo
+tiene abierto. Si esta tomado, pregunta, que es justo lo que se pedia: al abrir
+una pestaña, elegir proyecto.
+
+Saber que pestañas estan vivas se hace con un latido en `localStorage`: cada una
+anota su id y su workspace cada cinco segundos, y las que no laten en veinte se
+dan por muertas. Es mas simple que coordinar por BroadcastChannel y funciona
+aunque la pestaña quede en segundo plano. El cierre se detecta con `pagehide` y
+no con `beforeunload`, que en iOS Safari no siempre corre.
+
+Las pestañas del editor y el layout se guardan por workspace. Con una sola clave
+dos proyectos se pisaban los archivos abiertos; separados, cada proyecto
+conserva el suyo y volver a el trae de vuelta lo que se tenia abierto ahi.
+
+Queda un caso que no se resuelve y por eso se avisa: dos pestañas en el MISMO
+workspace comparten esa clave. El selector marca cual esta abierto en otra
+pestaña, para no llegar ahi sin querer.
+
+Cuatro tests de la regla de arranque, incluido el que motivo todo: si el ultimo
+proyecto ya esta abierto en otra pestaña, la nueva pregunta en vez de duplicarlo.
+```
 
 ### Pendiente de commit — clonar repositorios desde la aplicacion
 

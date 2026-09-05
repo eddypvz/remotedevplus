@@ -3,7 +3,9 @@ import { ref, computed, watch } from 'vue';
 import { getPanel } from '../modules';
 import { useTabs } from './tabs';
 
+/** Igual que las pestañas: el panel y el ancho del sidebar son por proyecto. */
 const STORAGE = 'rdp.layout.v1';
+const claveDe = (ws: number | null) => (ws === null ? STORAGE : `${STORAGE}:${ws}`);
 /** iPad vertical. Por debajo de esto el sidebar estorba como columna. */
 const NARROW = 900;
 
@@ -75,9 +77,12 @@ export const useLayout = defineStore('layout', () => {
     if (tabs.activeOcultaBarra) activePanel.value = 'explorer';
   }
 
-  function restore() {
+  let wsCargado: number | null = null;
+
+  function restore(ws: number | null = null) {
+    wsCargado = ws;
     try {
-      const s = JSON.parse(localStorage.getItem(STORAGE) || '{}');
+      const s = JSON.parse(localStorage.getItem(claveDe(ws)) || '{}');
       if (typeof s.userWantsSidebar === 'boolean') userWantsSidebar.value = s.userWantsSidebar;
       if (typeof s.activePanel === 'string') activePanel.value = s.activePanel;
       if (typeof s.sidebarWidth === 'number') sidebarWidth.value = Math.min(Math.max(s.sidebarWidth, 180), 560);
@@ -86,7 +91,7 @@ export const useLayout = defineStore('layout', () => {
 
   watch([userWantsSidebar, activePanel, sidebarWidth], () => {
     try {
-      localStorage.setItem(STORAGE, JSON.stringify({
+      localStorage.setItem(claveDe(wsCargado), JSON.stringify({
         userWantsSidebar: userWantsSidebar.value,
         activePanel: activePanel.value,
         sidebarWidth: sidebarWidth.value,

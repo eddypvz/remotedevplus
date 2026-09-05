@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import logo from './images/remotedevplus.png';
 import { ref, onMounted } from 'vue';
 import { useSession } from './stores/session';
 
@@ -23,11 +24,13 @@ async function submit() {
   <div class="gate">
     <form class="card" @submit.prevent="submit">
       <div class="brand">
-        <span class="mark">r+</span>
-        <div>
-          <h1>remotedevplus</h1>
-          <p>desarrollo remoto</p>
-        </div>
+        <!--
+          El logo es un wordmark horizontal, así que reemplaza al cuadrito y al
+          título juntos. Lleva `alt` con el nombre porque si la imagen no carga
+          la pantalla de login no debe quedarse sin decir de qué es.
+        -->
+        <img :src="logo" alt="RemoteDev+" class="logo">
+        <p>desarrollo remoto</p>
       </div>
 
       <template v-if="session.setup">
@@ -80,16 +83,11 @@ async function submit() {
   border-radius: 14px;
   box-shadow: 0 18px 50px var(--shadow);
 }
-.brand { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
-.mark {
-  display: grid; place-items: center;
-  width: 40px; height: 40px; flex: 0 0 40px;
-  border-radius: 11px;
-  background: linear-gradient(150deg, var(--accent), #7a5cff);
-  color: #fff; font: 700 15px/1 var(--mono);
-}
-.brand h1 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -.01em; }
-.brand p { margin: 1px 0 0; font-size: 12px; color: var(--fg-faint); }
+.brand { display: flex; flex-direction: column; gap: 5px; margin-bottom: 8px; }
+/* Alto fijo y ancho automático: el wordmark mide 1401×217, y fijar el ancho lo
+   deformaría en cuanto se cambie la imagen por otra de distinta proporción. */
+.logo { height: 40px; width: auto; max-width: 100%; align-self: flex-start; }
+.brand p { margin: 0; font-size: 12px; color: var(--fg-faint); }
 
 label { display: flex; flex-direction: column; gap: 5px; }
 label span { font-size: 12px; color: var(--fg-dim); }

@@ -120,7 +120,14 @@ async function destroy(w: Workspace) {
         <ul class="ws">
           <li v-for="w in workspaces.list" :key="w.id" :class="{ on: w.id === workspaces.activeId }">
             <button class="pick" @click="open(w)">
-              <span class="nm">{{ w.name }}</span>
+              <span class="nm">
+                {{ w.name }}
+                <!-- Que se sepa antes de abrirlo: dos pestañas en el mismo
+                     proyecto comparten sus archivos abiertos y se pisan. -->
+                <em v-if="w.id !== workspaces.activeId && workspaces.abiertoEnOtraPestana(w.id)" class="otra">
+                  abierto en otra pestaña
+                </em>
+              </span>
               <span class="paths">{{ w.folders.map((f) => f.name).join(' · ') || 'sin carpetas disponibles' }}</span>
               <span v-if="w.unavailable" class="warn">
                 {{ w.unavailable }} carpeta{{ w.unavailable > 1 ? 's' : '' }} fuera de sus raíces
@@ -256,6 +263,12 @@ header h2 { flex: 1; margin: 0; font-size: 14px; font-weight: 600; }
   border-radius: 8px; font-size: 16px;
 }
 .field input:focus { outline: none; border-color: var(--accent); }
+
+.nm .otra {
+  margin-left: 7px; padding: 0 7px; border-radius: 20px;
+  background: var(--bg-active); font: 10px var(--mono); font-style: normal;
+  color: var(--fg-faint);
+}
 
 .chosen { display: flex; flex-direction: column; gap: 4px; margin: 0 0 4px; padding: 0; list-style: none; }
 .chosen li {

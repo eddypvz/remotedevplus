@@ -9,7 +9,14 @@
   <meta name="color-scheme" content="light dark">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>remotedevplus</title>
+  <!-- Vite reescribe estas rutas al compilar y les pone hash, así que el
+       favicon se cachea como cualquier otro recurso.
+       `apple-touch-icon` es el que usa iPad al guardar la página en la pantalla
+       de inicio: sin él pone una captura de la página, que a ese tamaño no se
+       distingue de nada. -->
+  <link rel="icon" type="image/png" href="/src/images/favicon.png">
+  <link rel="apple-touch-icon" href="/src/images/favicon.png">
+  <title>RemoteDev+</title>
 </head>
 <body>
   <div id="app"></div>

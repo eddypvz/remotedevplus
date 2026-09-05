@@ -3,7 +3,16 @@ import { ref, computed, watch } from 'vue';
 import type { Tab, TabContext } from '../types';
 import { getModule } from '../modules';
 
+/**
+ * Las pestañas se guardan **por workspace**.
+ *
+ * Con una sola clave, dos pestañas del navegador en proyectos distintos se
+ * pisaban el conjunto de archivos abiertos. Separadas por workspace cada
+ * proyecto conserva el suyo, y cambiar de proyecto trae de vuelta lo que se
+ * tenía abierto ahí — que es lo que uno espera de una ventana por proyecto.
+ */
 const STORAGE = 'rdp.tabs.v1';
+const claveDe = (ws: number | null) => (ws === null ? STORAGE : `${STORAGE}:${ws}`);
 
 export const useTabs = defineStore('tabs', () => {
   const list = ref<Tab[]>([]);
@@ -133,10 +142,14 @@ export const useTabs = defineStore('tabs', () => {
    * estén donde estaban. Los PTY siguen vivos en el agente, así que la sesión
    * de Claude se reengancha sola.
    */
-  function restore() {
+  /** El workspace cuyo conjunto de pestañas está cargado ahora. */
+  let wsCargado: number | null = null;
+
+  function restore(ws: number | null = null) {
+    wsCargado = ws;
     try {
-      const raw = localStorage.getItem(STORAGE);
-      if (!raw) return;
+      const raw = localStorage.getItem(claveDe(ws));
+      if (!raw) { list.value = []; activeKey.value = null; return; }
       const saved = JSON.parse(raw) as { list: Tab[]; activeKey: string | null };
       list.value = (saved.list || []).filter((t) => getModule(t.moduleId));
       activeKey.value = list.value.some((t) => t.key === saved.activeKey) ? saved.activeKey : list.value[0]?.key ?? null;
@@ -147,7 +160,7 @@ export const useTabs = defineStore('tabs', () => {
 
   watch([list, activeKey], () => {
     try {
-      localStorage.setItem(STORAGE, JSON.stringify({ list: list.value, activeKey: activeKey.value }));
+      localStorage.setItem(claveDe(wsCargado), JSON.stringify({ list: list.value, activeKey: activeKey.value }));
     } catch { /* ídem */ }
   }, { deep: true });
 
