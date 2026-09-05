@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { writeFileSync, readFileSync } from 'node:fs';
-import { asignarCarriles } from '../apps/agent/src/services/git.js';
+import { asignarCarriles, urlDeRepoValida, nombreDeCarpetaValido } from '../apps/agent/src/services/git.js';
 import { sandbox, services, server, SUPER, PASS, q } from './helpers.js';
 
 /**
@@ -414,5 +414,74 @@ describe('conflictos de merge', () => {
     // Y abortar un rebase usa `rebase --abort`, no `merge --abort`.
     const r = await svc.git.seguir(SUPER, sb.at('r6'), 'abortar');
     assert.equal(r.estado.operacion, null);
+  });
+});
+
+describe('clonar un repositorio', () => {
+  test('la URL pasa por una lista blanca de formas', () => {
+    /*
+     * No es paranoia: `git clone` acepta transportes que ejecutan comandos.
+     * Con `ext::sh -c ...` clonar ES ejecutar, y una URL que empieza con guion
+     * se lee como bandera —`--upload-pack=` corre un binario arbitrario.
+     */
+    for (const buena of [
+      'https://github.com/usuario/proyecto.git',
+      'http://gitea.local/eddy/repo.git',
+      'git@github.com:usuario/proyecto.git',
+      'ssh://git@github.com/usuario/proyecto.git',
+    ]) assert.equal(urlDeRepoValida(buena), true, `rechazó ${buena}`);
+
+    for (const mala of [
+      'ext::sh -c whoami',
+      '--upload-pack=/bin/sh',
+      '-u',
+      'file:///etc/passwd',
+      '',
+      '   ',
+      'a'.repeat(600),
+    ]) assert.equal(urlDeRepoValida(mala), false, `aceptó ${mala}`);
+  });
+
+  test('el nombre de la carpeta tiene que ser un nombre', () => {
+    // El destino se arma como `<carpeta>/<nombre>`: una barra o un `..` lo
+    // pondrían en otro lado.
+    for (const bueno of ['repo', 'mi-proyecto', 'con espacio', '.oculto']) {
+      assert.equal(nombreDeCarpetaValido(bueno), true, `rechazó ${bueno}`);
+    }
+    for (const malo of ['', '.', '..', 'a/b', 'a\\b', 'x'.repeat(300), null, 5]) {
+      assert.equal(nombreDeCarpetaValido(malo), false, `aceptó ${JSON.stringify(malo)}`);
+    }
+  });
+
+  test('no se clona fuera de las raíces ni encima de algo que ya existe', async () => {
+    const sb = sandbox(['proj/ocupada', 'afuera'], { 'proj/ocupada/algo.txt': 'x' });
+    const svc = services(sb, { proj: 'proj' });
+    await svc.users.create({ username: 'eddy', password: PASS, permissions: ['admin'] }, SUPER);
+    const { as, login } = await server(svc);
+    await login('eddy');
+
+    const clonar = (b) => as('eddy', 'POST', '/api/git/clone', b);
+    const url = 'https://github.com/usuario/no-existe.git';
+
+    // Fuera de las raíces: ni se intenta la red.
+    assert.equal((await clonar({ url, dir: sb.at('afuera'), name: 'x' })).status, 403);
+    // Encima de una carpeta con contenido: sería destruir un proyecto.
+    assert.equal((await clonar({ url, dir: sb.at('proj'), name: 'ocupada' })).status, 409);
+    // Formas inválidas, antes de tocar nada.
+    assert.equal((await clonar({ url: 'ext::sh -c id', dir: sb.at('proj'), name: 'x' })).status, 400);
+    assert.equal((await clonar({ url, dir: sb.at('proj'), name: '../fuera' })).status, 400);
+  });
+
+  test('sin fs:write no se puede clonar, aunque se tenga git:write', async () => {
+    // Clonar crea una carpeta: es escritura de archivos, no solo de git.
+    const sb = sandbox(['proj']);
+    const svc = services(sb, { proj: 'proj' });
+    await svc.users.create({ username: 'ana', password: PASS, permissions: ['git:read', 'git:write'] }, SUPER);
+    const { as, login } = await server(svc);
+    await login('ana');
+    const r = await as('ana', 'POST', '/api/git/clone', {
+      url: 'https://github.com/x/y.git', dir: sb.at('proj'), name: 'y',
+    });
+    assert.equal(r.status, 403);
   });
 });

@@ -106,6 +106,27 @@ const MIGRATIONS = [
   );
   CREATE INDEX claude_sessions_user ON claude_sessions(user_id, created_at DESC);
   `,
+
+  // Credenciales de proveedores de git, por usuario.
+  //
+  // Hace falta para listar los repositorios a los que alguien tiene acceso: la
+  // llave SSH sirve para clonar y para nada más —la API de GitHub no la mira—,
+  // así que sin un token no hay forma de saber qué repositorios existen.
+  //
+  // Es un token vivo guardado en claro, y eso hay que decirlo: quien lea el
+  // archivo de la base puede usarlo. Va por usuario para que un dev no vea los
+  // repositorios de otro, y se recomienda uno de solo lectura. Clonar por URL
+  // funciona sin nada de esto.
+  `
+  CREATE TABLE git_tokens (
+    user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    proveedor TEXT    NOT NULL,
+    token     TEXT    NOT NULL,
+    login     TEXT,
+    saved_at  INTEGER NOT NULL,
+    PRIMARY KEY (user_id, proveedor)
+  );
+  `,
 ];
 
 export function openDb(path) {

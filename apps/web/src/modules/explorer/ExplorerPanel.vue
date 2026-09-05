@@ -352,13 +352,59 @@ async function desdeLaBarra(id: string) {
   }
 }
 
+/**
+ * Pegar archivos con Cmd+V / Ctrl+V.
+ *
+ * Es la mitad que un navegador puede hacer. La otra —copiar acá y pegar en
+ * Finder— **no es posible**: escribir referencias de archivo en el portapapeles
+ * del sistema (`NSFilenamesPboardType`, `CF_HDROP`) no está al alcance de una
+ * página. VS Code lo logra porque es una aplicación nativa, no una web.
+ *
+ * Y ojo con lo que llega: copiar un archivo en Finder muchas veces deja en el
+ * portapapeles solo su **icono de previsualización**, no los bytes. Con una
+ * captura de pantalla o algo copiado desde otra aplicación funciona bien. Por
+ * eso arrastrar sigue siendo el camino confiable, y se dice cuando lo pegado no
+ * sirve en vez de subir un PNG de 300 bytes que parece el archivo.
+ */
+async function pegarArchivos(e: ClipboardEvent) {
+  if (!puedeEscribir.value) return;
+  const dir = destinoDePegado();
+  if (!dir) return;
+
+  const lista = [...(e.clipboardData?.files ?? [])];
+  if (!lista.length) return;
+  e.preventDefault();
+
+  // Un solo `image/png` sin nombre propio es la firma de la previsualización
+  // que deja Finder, no del archivo que se creía copiar.
+  const sospechoso = lista.length === 1
+    && lista[0].type === 'image/png'
+    && /^(image|imagen|captura)\.png$/i.test(lista[0].name);
+  if (sospechoso) {
+    decir('El sistema pegó una previsualización, no el archivo. Arrástrelo en su lugar.', true);
+    return;
+  }
+  await subir(dir, lista);
+}
+
+/** Dónde cae lo pegado: la carpeta marcada, o la primera del workspace. */
+function destinoDePegado() {
+  const fila = files.rows.find((r) => r.entry.path === marcada.value);
+  if (fila) return dirDestino(fila);
+  return raizPorDefecto.value;
+}
+
+/** Última fila tocada, para que pegar y crear caigan donde se está mirando. */
+const marcada = ref<string | null>(null);
+
 /** La carpeta a la que va lo que se suelte en el fondo del panel. */
 const raizPorDefecto = computed(() => files.folders[0]?.path ?? null);
 </script>
 
 <template>
   <div
-    class="explorer"
+    class="explorer" tabindex="-1"
+    @paste="pegarArchivos"
     @dragover.prevent="() => {}"
     @drop.prevent="(e) => raizPorDefecto && soltarArchivos(e, raizPorDefecto)"
   >
@@ -407,7 +453,7 @@ const raizPorDefecto = computed(() => files.folders[0]?.path ?? null);
         :aria-expanded="row.entry.kind === 'dir' ? row.expanded : undefined"
         :style="{ paddingLeft: 6 + row.depth * 13 + 'px' }"
         :title="row.entry.path"
-        @click="alHacerClic(row)"
+        @click="marcada = row.entry.path; alHacerClic(row)"
         @contextmenu.prevent.stop="abrirMenu($event, row)"
         @pointerdown="tocar($event, row)"
         @pointermove="mover"
@@ -476,6 +522,9 @@ const raizPorDefecto = computed(() => files.folders[0]?.path ?? null);
 
 <style scoped>
 .explorer { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+/* Sin foco el panel no recibe el evento de pegado, pero el anillo del navegador
+   sobre un contenedor entero se ve como un error. */
+.explorer:focus { outline: none; }
 
 .switcher {
   display: flex; align-items: center; gap: 7px; flex: 0 0 auto;

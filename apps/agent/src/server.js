@@ -17,6 +17,7 @@ import { createEvents } from './services/events.js';
 import { createWorkspaces } from './services/workspaces.js';
 import { createClaude } from './services/claude.js';
 import { createGit } from './services/git.js';
+import { createProveedores } from './services/proveedores.js';
 import { createSearch } from './services/search.js';
 import { LIMITS } from '@remotedevplus/protocol';
 import { COOKIE } from './server-shared.js';
@@ -42,8 +43,9 @@ export function createServices(cfg) {
   const workspaces = createWorkspaces(db, guard, audit);
   const claude = createClaude(db, cfg, audit);
   const git = createGit(hosts, guard, audit);
+  const proveedores = createProveedores(db, audit);
   const search = createSearch(cfg, guard, audit);
-  return { db, audit, auth, users, hosts, guard, events, pty, workspaces, claude, git, search, cfg };
+  return { db, audit, auth, users, hosts, guard, events, pty, workspaces, claude, git, proveedores, search, cfg };
 }
 
 export async function buildServer(cfg = loadConfig(), services = createServices(cfg)) {

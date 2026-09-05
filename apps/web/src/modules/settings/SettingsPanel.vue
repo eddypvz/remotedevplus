@@ -1,17 +1,69 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref, onMounted } from 'vue';
 import { ALL } from '@remotedevplus/protocol';
 import { useSession } from '../../stores/session';
 import { useWorkspaces } from '../../stores/workspaces';
 import { useSettings } from '../../stores/settings';
 import type { ThemePreference } from '../../stores/settings';
 import Icon from '../../ui/Icon.vue';
+import { api } from '../../api';
+import { useDialogo } from '../../stores/dialogo';
 
 const session = useSession();
 const workspaces = useWorkspaces();
 const settings = useSettings();
+const dialogo = useDialogo();
 
 const isAdmin = computed(() => session.user?.permissions.includes(ALL));
+
+/*
+ * Token de GitHub, solo para listar repositorios al clonar.
+ *
+ * La llave SSH del servidor autentica un `git clone` y nada más: la API de
+ * GitHub no la mira. Sin token se puede clonar pegando la URL; el listado es lo
+ * único que lo necesita.
+ */
+const gh = ref<{ configurado: boolean; login: string | null }>({ configurado: false, login: null });
+const guardandoGh = ref(false);
+const errorGh = ref('');
+
+async function verGh() {
+  gh.value = await api.get<{ configurado: boolean; login: string | null }>('/api/git/provider')
+    .catch(() => ({ configurado: false, login: null }));
+}
+
+async function ponerGh() {
+  const token = await dialogo.pedirTexto({
+    titulo: 'Token de GitHub',
+    mensaje: 'Se usa solo para listar sus repositorios. Basta uno de lectura, y se comprueba '
+      + 'contra GitHub antes de guardarlo.',
+    entrada: { marcador: 'github_pat_… o ghp_…', crudo: true },
+    aceptar: 'Guardar',
+  });
+  if (!token) return;
+  guardandoGh.value = true;
+  errorGh.value = '';
+  try {
+    gh.value = await api.put('/api/git/provider', { token });
+  } catch (e: any) {
+    errorGh.value = e?.message || 'No se pudo guardar el token';
+  } finally {
+    guardandoGh.value = false;
+  }
+}
+
+async function quitarGh() {
+  const ok = await dialogo.confirmar({
+    titulo: 'Quitar el token',
+    mensaje: 'Dejará de poder listar sus repositorios. Clonar pegando la URL sigue funcionando. '
+      + 'Conviene revocarlo también en GitHub.',
+    aceptar: 'Quitar', peligroso: true,
+  });
+  if (!ok) return;
+  gh.value = await api.del('/api/git/provider');
+}
+
+onMounted(verGh);
 
 const themes: { id: ThemePreference; label: string }[] = [
   { id: 'system', label: 'Sistema' },
@@ -88,6 +140,35 @@ const themes: { id: ThemePreference; label: string }[] = [
       <button class="out" @click="session.logout()">
         <Icon name="logout" :size="15" /> Cerrar sesión
       </button>
+    </section>
+
+    <section>
+      <h3>GitHub</h3>
+      <p class="note">
+        Solo para <b>listar sus repositorios</b> al clonar. La llave SSH del servidor
+        autentica un <code>clone</code> pero la API no la mira, así que sin token no hay
+        forma de saber qué repositorios existen. Clonar pegando la URL funciona sin esto.
+      </p>
+      <div class="row">
+        <span>
+          <template v-if="gh.configurado">
+            Conectado <em>como {{ gh.login ?? 'usuario desconocido' }}</em>
+          </template>
+          <template v-else>Sin token</template>
+        </span>
+        <button v-if="!gh.configurado" class="out" :disabled="guardandoGh" @click="ponerGh">
+          {{ guardandoGh ? 'comprobando…' : 'Configurar' }}
+        </button>
+        <template v-else>
+          <button class="out" @click="ponerGh">Reemplazar</button>
+          <button class="out" @click="quitarGh">Quitar</button>
+        </template>
+      </div>
+      <p v-if="errorGh" class="note err">{{ errorGh }}</p>
+      <p class="note">
+        Se guarda <b>en claro</b> en la base del agente, por usuario: quien pueda leer ese
+        archivo puede usarlo. Por eso conviene uno de solo lectura y con caducidad.
+      </p>
     </section>
 
     <section>
@@ -184,6 +265,7 @@ dd { margin: 0; display: flex; flex-wrap: wrap; gap: 4px; overflow-wrap: anywher
 }
 .out:hover { color: var(--fg); background: var(--bg-active); }
 
+.note.err { color: var(--danger); }
 .note { margin: 9px 0 0; font-size: 12px; line-height: 1.6; color: var(--fg-faint); }
 .note strong { color: var(--fg-dim); }
 code { padding: .1em .35em; border-radius: 4px; background: var(--bg-surface); font: 11px var(--mono); }

@@ -113,7 +113,7 @@ docs/                ARCHITECTURE.md, SDK.md, sdk-surface.json
 | Claude en terminal | ✅ | `modules/claude/` — un PTY pelado, a propósito |
 | Visor de archivos | ✅ editor CodeMirror 6, y vistas propias para markdown, imágenes y PDF | `modules/file/` |
 | Buscador | ✅ ripgrep en streaming, con reemplazo global | `services/search.js`, `modules/search/` |
-| Git | ✅ árbol, tres cubetas, stash, diff, detalle de commit, fetch/pull/push/rebase/checkout, conflictos, refresco automático | `services/git.js`, `modules/git/` |
+| Git | ✅ árbol, tres cubetas, stash, diff, detalle de commit, fetch/pull/push/rebase/checkout, conflictos, clone, refresco automático | `services/git.js`, `modules/git/` |
 | Canal de eventos | ✅ `/ws/events`: explorador y git se refrescan solos | `services/events.js`, `stores/eventos.ts` |
 | Base de datos | ⬜ placeholder, y **sin icono en el rail** hasta que tenga contenido | `modules/db/` |
 
@@ -298,6 +298,31 @@ Todas están razonadas en `docs/ARCHITECTURE.md`. Las que más cuesta reconstrui
   por su campo `cwd`. Mover los `.jsonl` no alcanza: hay que corregir ese campo,
   y **solo ese** —la ruta vieja dentro del contenido de los mensajes es parte de
   lo que se dijo.
+- **La llave SSH no sirve para listar repositorios.** Autentica un `git clone` y
+  nada más; la API de GitHub no la mira. Por eso el listado del modal de clonar
+  necesita un token por usuario, y clonar pegando la URL es el camino que
+  funciona sin configurar nada.
+- **`git clone` acepta transportes que ejecutan comandos.** Con `ext::sh -c …`
+  clonar **es** ejecutar, y una URL que empieza con guion se lee como bandera
+  —`--upload-pack=` corre un binario arbitrario. Por eso `urlDeRepoValida` es
+  una lista blanca de formas, y en la línea de comandos va `--` antes de la URL
+  como segundo cerrojo.
+- **La API de GitHub pagina de 100 en 100, y una cuenta real tiene más.** El
+  primer intento traía una sola página y se quedaba ahí: con 202 repositorios
+  escondía la mitad —incluidos dos dueños enteros— y sin decirlo. Hay que
+  paginar hasta agotar, con un tope solo para no quedar en un bucle, y **avisar
+  si se alcanza** en vez de devolver una lista incompleta que parece completa.
+- **Copiar un archivo en la aplicación y pegarlo en Finder no es posible.**
+  Escribir referencias de archivo en el portapapeles del sistema
+  —`NSFilenamesPboardType`, `CF_HDROP`— no está al alcance de una página. VS Code
+  lo logra porque es una aplicación nativa. La única salida hacia el sistema es
+  la descarga; arrastrar hacia afuera existe solo en Chrome, con el
+  `DownloadURL` no estándar, y **no** en Safari.
+- **Al pegar, Finder suele dejar solo el icono de previsualización.** El evento
+  `paste` trae un `image/png` genérico en vez de los bytes del archivo, así que
+  subirlo sin más crea un PNG de 300 bytes con cara de archivo. Se detecta por
+  esa firma y se dice que hay que arrastrar. Con capturas de pantalla y con lo
+  copiado desde otras aplicaciones sí llegan los bytes.
 - **npm 11 bloquea los install scripts.** Quedan aprobados en `allowScripts` del
   `package.json` raíz, que se commitea.
 
@@ -337,81 +362,74 @@ bitácora es un buzón de salida, no un archivo histórico.
 Formato: encabezado en una línea (imperativo, ≤72 caracteres), línea en blanco,
 y el cuerpo explicando el *porqué* antes que el *qué*.
 
-### Pendiente de commit — el chat mostraba el principio, no lo ultimo
+### Pendiente de commit — clonar repositorios desde la aplicacion
 
 ```
-Leer el transcript del disco cuando el SDK se queda corto
+Agregar clonar al modulo de git
 
-Abrir una conversacion larga mostraba su principio y nada reciente.
-`getSessionMessages` reconstruye el hilo siguiendo la cadena de mensajes padre,
-y una compactacion la rompe. Medido en una sesion de 4613 lineas: devolvio 143
-mensajes de 1667, solo 70 de ellos presentes en ese archivo, cubriendo de la
-linea 102 a la 2240 y deteniendose doce horas antes del final.
+Faltaba la puerta de entrada: para empezar a trabajar en un repositorio habia
+que ir al terminal.
 
-`transcriptDeDisco` lee el .jsonl y filtra a los mensajes de la conversacion.
-Gana el que traiga mas: en las sesiones cortas los dos coinciden y no cambia
-nada, y el dia que el SDK lo arregle vuelve a ganar el sin tocar codigo.
+El modal tiene dos caminos a proposito. Pegar la URL siempre funciona y no
+necesita configurar nada. El listado de "mis repositorios" necesita un token de
+GitHub, y eso no es un capricho: la llave SSH del servidor autentica un clone y
+nada mas, la API no la mira, asi que sin token no hay forma de saber que
+repositorios existen. El listado incluye los de organizaciones y aquellos donde
+uno es colaborador, que es lo que significa "a los que tengo acceso".
 
-Es una dependencia del formato en disco, que es lo que este modulo evita en todo
-lo demas. Se acepta porque el riesgo es bajo: las lineas del archivo tienen la
-misma forma que los SessionMessage del SDK, asi que no hay traduccion que se
-pueda romper. Y el archivo se busca por nombre en todos los proyectos en vez de
-derivar la carpeta de la ruta: esa codificacion no esta documentada, y adivinarla
-es la clase de suposicion que falla en silencio.
+El destino se elige navegando las raices permitidas —se reutiliza el
+FolderBrowser del workspace— y el nombre de la carpeta se escribe: se propone
+desde la URL y deja de proponerse en cuanto se toca. La carpeta la crea el clon.
 
-El archivo se busca por nombre en todos los proyectos, y cuando aparece en mas
-de uno gana el de mtime mas reciente. Eso ultimo no es un detalle: renombrar la
-carpeta de un proyecto deja una copia con el nombre viejo, `readdir` no promete
-orden y el viejo suele ordenar antes, asi que leer el primero mostraba una copia
-congelada —la conversacion como estaba horas antes, con el ultimo mensaje viejo.
+SEGURIDAD
 
-Cinco tests: el orden y el filtrado del ruido —el archivo trae snapshots,
-titulos generados y estado interno—, que una linea corrupta no corte la lectura,
-el desempate por mtime entre dos proyectos, y que sin archivo devuelva vacio.
+`git clone` acepta transportes que ejecutan comandos: con `ext::sh -c ...`
+clonar ES ejecutar, y una URL que empieza con guion se lee como bandera
+—`--upload-pack=` corre un binario arbitrario. Por eso la URL pasa por una lista
+blanca de formas y en la linea de comandos va `--` antes de ella, como segundo
+cerrojo.
+
+El destino se arma en el agente, nunca lo manda el cliente: la carpeta pasa por
+paths.js y el nombre se valida como nombre. Clonar encima de algo con contenido
+se rechaza en vez de destruirlo. Y hace falta `fs:write` ademas de `git:write`,
+porque crear una carpeta es escribir archivos.
+
+EL TOKEN
+
+Se guarda en claro en la base, por usuario, y la interfaz lo dice en vez de
+esconderlo: quien pueda leer ese archivo puede usarlo. No hay un almacen de
+secretos en el que apoyarse, y cifrarlo con una clave que vive al lado seria
+teatro. Se comprueba contra GitHub antes de guardarlo —para no dejar uno
+inservible que falle en el momento menos util— y de paso se aprende el login.
+
+PEGAR ARCHIVOS EN EL EXPLORADOR
+
+Cmd+V / Ctrl+V sube lo que haya en el portapapeles a la carpeta marcada. Es la
+mitad que un navegador puede hacer: copiar en la aplicacion y pegar en Finder no
+es posible —escribir referencias de archivo en el portapapeles del sistema no
+esta al alcance de una pagina, y por eso VS Code lo logra siendo nativo.
+
+Se detecta el caso enganoso: copiar un archivo en Finder suele dejar solo su
+icono de previsualizacion, no los bytes, asi que llega un image/png generico.
+Subirlo crearia un PNG de 300 bytes con cara de archivo; en vez de eso se avisa
+que hay que arrastrar.
+
+EL NAVEGADOR DE CARPETAS A TODO EL ANCHO
+
+`.browser` es una columna flex sin ancho propio, asi que como hijo flex tomaba
+el de su contenido y dejaba la mitad del modal en blanco. Se estira con
+`flex: 1` desde el contenedor, y se le quitan borde y radio porque el contenedor
+ya los tiene.
+
+EL LISTADO PAGINA
+
+La API devuelve 100 por pagina como maximo, y una cuenta real tiene mas: con el
+token puesto aparecieron 202. El primer intento traia una sola pagina y se
+quedaba ahi, escondiendo la mitad —incluidos dos dueños enteros— sin decirlo.
+Ahora pagina hasta agotar, con un tope de diez paginas para no quedar en un
+bucle, y si lo alcanza lo dice en pantalla.
+
+Cuatro tests de la frontera: la lista blanca de URLs con los dos vectores
+reales, el nombre de carpeta, que no se clone fuera de las raices ni encima de
+algo con contenido, y que git:write sin fs:write no alcance.
 ```
-
-### Pendiente de commit — tareas que se quedaban pegadas, y flechas visibles
-
-```
-Las tareas terminadas se olvidan, y las flechas del terminal se encuentran
-
-TAREAS EN SEGUNDO PLANO
-
-Nada las quitaba nunca. Se guardaban en un Map por conversacion y se reenviaban
-en cada reconexion, asi que la barra quedaba fija con avisos de tareas
-terminadas hace horas, hasta cerrar la pestaña.
-
-Ahora una tarea terminada vence a los cinco minutos —se conserva un rato porque
-el aviso de que termino es justamente lo que se quiere ver— y hay un boton para
-descartarlas antes, que es el gesto de "entendido".
-
-FLECHAS DEL TERMINAL
-
-Ya existian y ya funcionaban: se comprobo que `\x1b[A` recupera el comando
-anterior a traves del PTY. El problema era encontrarlas. Estaban en la posicion
-cuatro de trece, en una barra que scrollea, asi que en una tablet angosta
-quedaban fuera de la vista y parecia que no existian.
-
-Ahora `↑` y `↓` van al frente, junto a esc, y anchas como ella. Reutilizar el
-comando anterior es media terminal cuando no hay teclado.
-```
-
-### Pendiente de commit — el historial de Claude ya no rotula mal
-
-```
-Atribuir cada sesion de Claude a la carpeta por la que se pregunto
-
-El historial se veia "mezclado": conversaciones de este repositorio aparecian
-rotuladas con la ruta de otro. La causa no era el SDK, era la etiqueta.
-
-El `cwd` de una sesion NO es un valor unico: se registra por mensaje y cambia
-cuando un subagente trabaja en otro directorio. Hay sesiones con catorce rutas
-distintas. `listSessions` reporta solo una de ellas, y usarla para etiquetar da
-una carpeta cualquiera de las que la sesion toco.
-
-Lo que si identifica a que proyecto pertenece una conversacion es donde la
-guarda Claude Code, que es exactamente lo que selecciona `dir`. Asi que la
-sesion se atribuye a la carpeta por la que se pregunto, y el cwd muestreado
-queda como dato secundario.
-```
-

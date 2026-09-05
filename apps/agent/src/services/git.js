@@ -87,6 +87,45 @@ export function asignarCarriles(commits) {
   return salida;
 }
 
+/**
+ * Una URL de repositorio que se puede pasar a `git clone` sin peligro.
+ *
+ * No es paranoia: `git clone` acepta transportes que ejecutan comandos. Con
+ * `ext::sh -c ...` clonar es ejecutar, y una URL que empieza con guion la lee
+ * como una bandera —`--upload-pack=` corre un binario arbitrario. Por eso acá
+ * hay una lista blanca de formas, y en la línea de comandos va `--` antes de la
+ * URL para que ni siquiera un guion que se escape pueda leerse como opción.
+ */
+export function urlDeRepoValida(url) {
+const u = String(url ?? '').trim();
+if (!u || u.length > 500) return false;
+if (u.startsWith('-')) return false;
+// `scp` de toda la vida: git@github.com:usuario/repo.git
+if (/^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:[A-Za-z0-9._~\-/]+$/.test(u)) return true;
+try {
+  const p = new URL(u);
+  return ['https:', 'http:', 'ssh:', 'git:'].includes(p.protocol);
+} catch {
+  return false;
+}
+}
+
+/**
+ * Un nombre de carpeta, no una ruta.
+ *
+ * El destino se arma como `<carpeta elegida>/<nombre>`, así que una barra o un
+ * `..` acá crearían el clon en otro lado. `paths.js` lo detendría igual, pero
+ * fallar acá dice por qué.
+ */
+export function nombreDeCarpetaValido(nombre) {
+return typeof nombre === 'string'
+  && nombre.length > 0 && nombre.length <= 255
+  && !nombre.includes('/') && !nombre.includes('\\')
+  && nombre !== '.' && nombre !== '..'
+  && !nombre.includes('\0');
+}
+
+
 export function createGit(hosts, guard, audit) {
   /** Resuelve el repositorio y comprueba que lo sea, dentro de las raíces. */
   async function repo(user, cwd) {
@@ -157,7 +196,7 @@ export function createGit(hosts, guard, audit) {
     return null;
   }
 
-  /** Convierte los códigos XY de porcelain v2 en algo con nombre. */
+/** Convierte los códigos XY de porcelain v2 en algo con nombre. */
   function estadoDe(xy) {
     const letra = (c) => ({ M: 'modificado', A: 'agregado', D: 'borrado', R: 'renombrado', C: 'copiado', T: 'tipo' }[c]);
     return { staged: letra(xy[0]) ?? null, arbol: letra(xy[1]) ?? null };
@@ -565,6 +604,41 @@ export function createGit(hosts, guard, audit) {
       await git(r, ['checkout', destino]);
       audit.log(user.id, 'git.checkout', { cwd: r.path, destino });
       return { destino, desprendido: destino === ref && /^[0-9a-f]{7,40}$/i.test(ref), estado: await this.estado(user, cwd) };
+    },
+
+    /**
+     * Clona un repositorio dentro de una carpeta permitida.
+     *
+     * El destino se arma acá y no lo manda el cliente: la carpeta pasa por
+     * `paths.js` y el nombre se valida como nombre. Se rechaza si ya existe con
+     * contenido —clonar encima de un proyecto sería destruirlo sin avisar.
+     */
+    async clonar(user, { url, dir, nombre }) {
+      if (!urlDeRepoValida(url)) throw httpError(400, 'Esa dirección de repositorio no es válida');
+      if (!nombreDeCarpetaValido(nombre)) throw httpError(400, 'El nombre de la carpeta no es válido');
+
+      const destino = await guard.resolvePath(user, dir, { mustExist: true });
+      const host = hosts.get(destino.root.host);
+      if ((await host.stat(destino.path))?.kind !== 'dir') {
+        throw httpError(400, 'El destino no es una carpeta');
+      }
+
+      const ruta = join(destino.path, nombre);
+      const yaEsta = await host.stat(ruta);
+      if (yaEsta) {
+        const dentro = yaEsta.kind === 'dir' ? await host.list(ruta).catch(() => []) : ['x'];
+        if (dentro.length) throw httpError(409, `Ya existe ${nombre} y no está vacía`);
+      }
+
+      audit.log(user.id, 'git.clone', { url, destino: ruta });
+      // `--` antes de la URL: sin eso una que empiece con guion se leería como
+      // opción. La validación ya lo impide; esto es el segundo cerrojo.
+      const salida = await gitRed(
+        { host, path: destino.path },
+        ['clone', '--progress', '--', url, ruta],
+        180_000,
+      );
+      return { path: ruta, salida };
     },
 
     async cambiarRama(user, cwd, nombre, crear) {

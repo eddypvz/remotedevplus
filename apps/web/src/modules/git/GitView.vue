@@ -8,6 +8,7 @@ import PanelCambios from './PanelCambios.vue';
 import PanelStash from './PanelStash.vue';
 import DiffVista from './DiffVista.vue';
 import DetalleCommit from './DetalleCommit.vue';
+import ClonarModal from './ClonarModal.vue';
 import { api, q } from '../../api';
 import { useGit } from '../../stores/git';
 import { useDialogo } from '../../stores/dialogo';
@@ -59,6 +60,7 @@ async function verDiff(ruta: string, preparado: boolean) {
 }
 
 const ocupado = ref(false);
+const clonando = ref(false);
 
 /**
  * Envuelve una operación: bloquea los botones y muestra el error tal como lo
@@ -229,6 +231,10 @@ onBeforeUnmount(() => {
       ><Icon name="rama" :size="14" /> branch</button>
 
       <button
+        class="op" title="Clonar un repositorio en una carpeta" @click="clonando = true"
+      ><Icon name="abajo" :size="14" /> clone</button>
+
+      <button
         class="recargar" :disabled="ocupado"
         title="Vuelve a leer el repositorio: estado, árbol, ramas y stash. No habla con el remoto"
         @click="git.cargar(carpeta, true)"
@@ -313,6 +319,8 @@ onBeforeUnmount(() => {
         <PanelStash v-else />
       </aside>
     </div>
+
+    <ClonarModal v-if="clonando" @cerrar="clonando = false" />
 
     <Teleport to="body">
       <div v-if="diff" class="scrim" @click.self="diff = null">

@@ -1,4 +1,6 @@
-export default async function gitRoutes(app, { git }) {
+import { hasPermission } from '../paths.js';
+
+export default async function gitRoutes(app, { git, proveedores }) {
   const L = { config: { requires: 'git:read' } };
   const W = { config: { requires: 'git:write' } };
   const cwd = (req) => req.query.cwd ?? req.body?.cwd;
@@ -26,6 +28,33 @@ export default async function gitRoutes(app, { git }) {
   app.post('/api/git/discard', W, async (req) => (
     git.descartar(req.user, cwd(req), req.body?.paths)
   ));
+  /*
+   * Clonar y el listado de repositorios.
+   *
+   * `git:write` no alcanza para clonar: crea una carpeta nueva en el disco, así
+   * que también hace falta `fs:write`. Se comprueba adentro porque el hook
+   * global solo verifica un permiso por ruta.
+   */
+  app.post('/api/git/clone', W, async (req) => {
+    if (!hasPermission(req.user.permissions, 'fs:write')) {
+      const err = new Error('Falta el permiso fs:write');
+      err.statusCode = 403;
+      throw err;
+    }
+    return git.clonar(req.user, {
+      url: req.body?.url, dir: req.body?.dir, nombre: req.body?.name,
+    });
+  });
+
+  // El token es por usuario y nunca se devuelve: solo si está y de quién es.
+  app.get('/api/git/provider', L, async (req) => proveedores.estado(req.user));
+  app.put('/api/git/provider', W, async (req) => proveedores.guardar(req.user, req.body?.token));
+  app.delete('/api/git/provider', W, async (req) => proveedores.borrar(req.user));
+
+  app.get('/api/git/repos', L, async (req) => (
+    proveedores.repositorios(req.user, { buscar: req.query.q ?? '' })
+  ));
+
   app.post('/api/git/resolve', W, async (req) => (
     git.resolver(req.user, cwd(req), req.body?.paths, req.body?.side)
   ));
